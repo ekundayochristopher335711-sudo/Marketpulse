@@ -70,6 +70,11 @@ class JijiConnectorTests(unittest.TestCase):
         )
         self.assertNotIn("description", listing.model_fields_set)
 
+    def test_parser_skips_prices_outside_supported_range(self) -> None:
+        outlier_html = LISTING_HTML.replace("450,000", "80,000,100,000")
+
+        self.assertEqual(parse_listing_cards(outlier_html, "Phones & Tablets"), [])
+
     def test_discovery_checks_robots_and_only_emits_permitted_fields(self) -> None:
         connector = JijiConnector(
             connector_config(

@@ -11,6 +11,7 @@ from ..schemas import ListingCreate
 
 JIJI_ROOT = "https://jiji.ng"
 MAX_RESPONSE_BYTES = 2_000_000
+MAX_LISTING_PRICE_NGN = 10_000_000_000
 
 CATEGORY_PATHS = {
     "Vehicles": "/vehicles",
@@ -137,6 +138,9 @@ def parse_listing_cards(
         location = card.get("location", "")
         if not title.strip() or not price_digits or not location:
             continue
+        asking_price = int(price_digits)
+        if asking_price > MAX_LISTING_PRICE_NGN:
+            continue
 
         location_parts = [part.strip() for part in location.split(",") if part.strip()]
         source_url = urlunsplit(("https", parsed.netloc, path, "", ""))
@@ -146,7 +150,7 @@ def parse_listing_cards(
                 source_listing_id=listing_id,
                 title=title[:500],
                 category=category,
-                asking_price=int(price_digits),
+                asking_price=asking_price,
                 currency="NGN",
                 location=location[:200],
                 state=location_parts[0][:100] if location_parts else None,
