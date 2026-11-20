@@ -66,6 +66,16 @@ function imageForCategory(category: string): string {
   return '📦'
 }
 
+function stableCsvMarker(category: string): string {
+  const name = category.toLowerCase()
+  if (name.includes('phone') || name.includes('tablet')) return 'PH'
+  if (name.includes('computer') || name.includes('laptop')) return 'PC'
+  if (name.includes('game')) return 'GM'
+  if (name.includes('camera')) return 'CA'
+  if (name.includes('home')) return 'HM'
+  return name.match(/[a-z0-9]/g)?.slice(0, 2).join('').toUpperCase() || 'IT'
+}
+
 export function parseListingsCsv(csv: string): Product[] {
   const rows = parseCsvRows(csv.replace(/^\uFEFF/, ''))
   if (rows.length < 2) throw new Error('The CSV must include a header and at least one listing.')
@@ -133,7 +143,7 @@ export function parseListingsCsv(csv: string): Product[] {
         views,
         saves,
         trend,
-        image: imageForCategory(category),
+        image: stableCsvMarker(category),
         description: value(row, 'description')?.trim() || 'Imported listing. Verify the source record and listing status before relying on it.',
         verifiedDemo: false,
       }

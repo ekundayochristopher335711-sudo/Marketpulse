@@ -41,7 +41,17 @@ function imageForLiveCategory(category:string):string {
 }
 function apiListingToProduct(listing:ApiListing):Product {
  const observed=new Date(listing.last_observed_at)
- return {id:listing.id,title:listing.title,category:listing.category,price:listing.asking_price,previousPrice:listing.asking_price,location:listing.location,source:listing.source_name,condition:listing.condition||'Not provided',listed:Number.isNaN(observed.valueOf())?'Recently observed':observed.toLocaleString(),views:0,saves:0,trend:0,image:imageForLiveCategory(listing.category),description:'Live listing collected from an approved marketplace source.',verifiedDemo:false,origin:'live'}
+ return {id:listing.id,title:listing.title,category:listing.category,price:listing.asking_price,previousPrice:listing.asking_price,location:listing.location,source:listing.source_name,condition:listing.condition||'Not provided',listed:Number.isNaN(observed.valueOf())?'Recently observed':observed.toLocaleString(),views:0,saves:0,trend:0,image:stableCategoryMarker(listing.category),description:'Live listing collected from an approved marketplace source.',verifiedDemo:false,origin:'live'}
+}
+
+function stableCategoryMarker(category:string):string {
+ const name=category.toLowerCase()
+ if(name.includes('phone')||name.includes('tablet'))return 'PH'
+ if(name.includes('computer')||name.includes('laptop'))return 'PC'
+ if(name.includes('game'))return 'GM'
+ if(name.includes('camera'))return 'CA'
+ if(name.includes('home'))return 'HM'
+ return name.match(/[a-z0-9]/g)?.slice(0,2).join('').toUpperCase()||'IT'
 }
 
 function isProduct(value: unknown): value is Product {
