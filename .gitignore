@@ -4,3 +4,8 @@ dist
 .venv
 __pycache__
 *.db
+*.sqlite
+*.sqlite3
+.pytest_cache
+.mypy_cache
+.ruff_cache

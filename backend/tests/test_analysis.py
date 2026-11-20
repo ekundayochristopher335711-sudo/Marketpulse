@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -51,11 +52,12 @@ class AnalysisEndpointTests(unittest.TestCase):
                 main.analyze_market(make_payload(), make_request("127.0.0.1"))
         self.assertEqual(error.exception.status_code, 503)
 
-    def test_analysis_rejects_remote_requests_by_default(self) -> None:
-        with patch.object(main, "ALLOW_REMOTE_AI_ANALYSIS", False):
+    def test_analysis_rejects_remote_requests_even_with_legacy_enable_flag(self) -> None:
+        with patch.dict(os.environ, {"ALLOW_REMOTE_AI_ANALYSIS": "true"}):
             with self.assertRaises(HTTPException) as error:
                 main.analyze_market(make_payload(), make_request("203.0.113.8"))
         self.assertEqual(error.exception.status_code, 403)
+        self.assertTrue(main.analysis_status()["local_only"])
 
     def test_analysis_sends_only_aggregates_and_returns_model_output(self) -> None:
         captured: dict[str, object] = {}
@@ -72,7 +74,6 @@ class AnalysisEndpointTests(unittest.TestCase):
         with (
             patch.object(main, "OPENAI_API_KEY", "test-key"),
             patch.object(main, "OPENAI_MODEL", "test-model"),
-            patch.object(main, "ALLOW_REMOTE_AI_ANALYSIS", False),
             patch.object(main, "OpenAI", FakeOpenAI),
         ):
             result = main.analyze_market(make_payload(), make_request("127.0.0.1"))

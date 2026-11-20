@@ -1,5 +1,8 @@
 import type { MarketAnalysisPayload, Product } from './types'
 
+const MAX_IMPORT_ROWS = 50_000
+const MAX_TITLE_LENGTH = 500
+
 function parseCsvRows(csv: string): string[][] {
   const rows: string[][] = []
   let row: string[] = []
@@ -66,8 +69,15 @@ function imageForCategory(category: string): string {
 export function parseListingsCsv(csv: string): Product[] {
   const rows = parseCsvRows(csv.replace(/^\uFEFF/, ''))
   if (rows.length < 2) throw new Error('The CSV must include a header and at least one listing.')
+  if (rows.length - 1 > MAX_IMPORT_ROWS) {
+    throw new Error(`The CSV contains too many rows. Import up to ${MAX_IMPORT_ROWS.toLocaleString()} listings at a time.`)
+  }
 
   const headers = rows[0].map(header => header.toLowerCase().replace(/[\s-]+/g, '_'))
+  if (new Set(headers).size !== headers.length) throw new Error('The CSV contains duplicate column names.')
+  const expectedWidth = headers.length
+  const malformedRow = rows.slice(1).findIndex(row => row.length !== expectedWidth)
+  if (malformedRow !== -1) throw new Error(`Row ${malformedRow + 2}: the number of columns does not match the header.`)
   const headerIndex = new Map(headers.map((header, index) => [header, index]))
   const value = (row: string[], ...names: string[]) => {
     for (const name of names) {
@@ -100,6 +110,7 @@ export function parseListingsCsv(csv: string): Product[] {
       if (!title || !category || !location || !source) {
         throw new Error('title, category, location, and source cannot be blank.')
       }
+      if (title.length > MAX_TITLE_LENGTH) throw new Error(`title cannot exceed ${MAX_TITLE_LENGTH} characters.`)
 
       const price = numberField(value(row, 'price', 'asking_price'), 'price')
       if (price === 0) throw new Error('"price" must be greater than zero.')
@@ -131,6 +142,47 @@ export function parseListingsCsv(csv: string): Product[] {
       throw new Error(`Row ${rowNumber}: ${message}`)
     }
   })
+}
+
+export function buildLocalAnalysis(products: Product[]): { text: string; model: string } {
+  if (!products.length) return { text: 'There are no listings to analyze yet.', model: 'Local analysis' }
+
+  const grouped = products.reduce<Record<string, Product[]>>((groups, product) => {
+    (groups[product.category] ??= []).push(product)
+    return groups
+  }, {})
+  const categorySummaries = Object.entries(grouped)
+    .sort(([, left], [, right]) => right.length - left.length)
+    .slice(0, 8)
+    .map(([category, items]) => {
+      const categoryMedian = median(items.map(item => item.price))
+      const reductions = items.filter(item => item.previousPrice > item.price).length
+      return `- ${category}: ${items.length} records; median asking price NGN ${categoryMedian.toLocaleString('en-NG')}; ${reductions} observed reduction${reductions === 1 ? '' : 's'}.`
+    })
+  const reductions = products
+    .filter(product => product.previousPrice > product.price)
+    .sort((left, right) => (right.previousPrice - right.price) - (left.previousPrice - left.price))
+    .slice(0, 5)
+  const engagementCoverage = products.filter(product => product.views > 0 || product.saves > 0).length
+
+  return {
+    model: 'Local analysis',
+    text: [
+      `Observed ${products.length.toLocaleString()} listing records.`,
+      `Overall median asking price: NGN ${median(products.map(product => product.price)).toLocaleString('en-NG')}.`,
+      `${engagementCoverage.toLocaleString()} records include at least one reported view or save. This is coverage, not verified demand.`,
+      '',
+      'Category evidence:',
+      ...categorySummaries,
+      '',
+      'Largest observed asking-price changes:',
+      ...(reductions.length
+        ? reductions.map(product => `- ${product.title} [record ${product.id}]: NGN ${product.previousPrice.toLocaleString('en-NG')} → NGN ${product.price.toLocaleString('en-NG')}.`)
+        : ['- No lower current asking prices were supplied.']),
+      '',
+      'Limitations: asking prices are not completed-sale prices; imported records are not independently verified; listing activity does not prove buyer demand or profit.'
+    ].join('\n')
+  }
 }
 
 export function median(values: number[]): number {

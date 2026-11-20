@@ -17,3 +17,10 @@ export type MarketAnalysisPayload = {
     engagement_records: number
   }>
 }
+
+export type WorkspaceSettings = {
+  defaultMarket: 'Nigeria' | 'Lagos State' | 'Abuja FCT'
+  currency: 'NGN'
+  compactMode: boolean
+  weeklyDigest: boolean
+}
