@@ -2,6 +2,7 @@ export type Product = {
   id: number; title: string; category: string; price: number; previousPrice: number;
   location: string; source: string; condition: string; listed: string; views: number;
   saves: number; trend: number; image: string; description: string; verifiedDemo: boolean;
+  origin?: 'live' | 'imported' | 'demo';
 }
 export type Page = 'Overview'|'Products'|'Trending'|'Price intelligence'|'Opportunities'|'Watchlist'|'Data sources'|'Reports'|'Settings'
 export type MarketAnalysisPayload = {

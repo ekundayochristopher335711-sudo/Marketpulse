@@ -220,12 +220,12 @@ export function toCsv(products: Product[]): string {
     ...products.map(product => [
       product.title, product.category, product.price, product.previousPrice, product.location,
       product.source, product.condition, product.listed, product.views, product.saves,
-      product.trend, product.description, product.verifiedDemo ? 'demo' : 'imported',
+      product.trend, product.description, product.origin === 'live' ? 'live' : product.verifiedDemo ? 'demo' : 'imported',
     ].map(escape).join(',')),
   ].join('\r\n')
 }
 
-export function buildMarketReport(products: Product[], imported: boolean): string {
+export function buildMarketReport(products: Product[], datasetLabel: string): string {
   const categoryCounts = products.reduce<Record<string, number>>((counts, product) => {
     counts[product.category] = (counts[product.category] ?? 0) + 1
     return counts
@@ -238,7 +238,7 @@ export function buildMarketReport(products: Product[], imported: boolean): strin
   return [
     'MarketPulse Nigeria — Market snapshot',
     `Generated: ${new Date().toISOString()}`,
-    `Dataset: ${imported ? 'User-imported CSV' : 'Demonstration data'}`,
+    `Dataset: ${datasetLabel}`,
     `Listings analyzed: ${products.length}`,
     `Median asking price: ${products.length ? `NGN ${median(products.map(product => product.price)).toLocaleString('en-NG')}` : 'N/A'}`,
     `Rows with a lower current ask than previous price: ${reductions}`,

@@ -24,7 +24,25 @@ const nav: {label:Page; icon:typeof Activity; group:string}[] = [
  {label:'Reports',icon:Activity,group:'MANAGE'},
  {label:'Settings',icon:Settings,group:'SYSTEM'}
 ]
+const primaryLabels = new Set<Page>(['Overview','Products','Data sources','Reports','Settings'])
 const fmtCompact = (n:number) => n>=1000000 ? `₦${(n/1000000).toFixed(1)}m` : n>=1000 ? `₦${Math.round(n/1000)}k` : money(n)
+
+type BackendState = {loading:boolean;error:string;overview:MarketOverview|null;listings:ApiListing[]}
+type DataMode = 'live' | 'imported' | 'demo' | 'empty'
+
+function imageForLiveCategory(category:string):string {
+ const name=category.toLowerCase()
+ if(name.includes('phone')||name.includes('tablet'))return 'ðŸ“±'
+ if(name.includes('computer')||name.includes('laptop'))return 'ðŸ’»'
+ if(name.includes('game'))return 'ðŸŽ®'
+ if(name.includes('camera'))return 'ðŸ“·'
+ if(name.includes('home'))return 'ðŸ '
+ return 'ðŸ“¦'
+}
+function apiListingToProduct(listing:ApiListing):Product {
+ const observed=new Date(listing.last_observed_at)
+ return {id:listing.id,title:listing.title,category:listing.category,price:listing.asking_price,previousPrice:listing.asking_price,location:listing.location,source:listing.source_name,condition:listing.condition||'Not provided',listed:Number.isNaN(observed.valueOf())?'Recently observed':observed.toLocaleString(),views:0,saves:0,trend:0,image:imageForLiveCategory(listing.category),description:'Live listing collected from an approved marketplace source.',verifiedDemo:false,origin:'live'}
+}
 
 function isProduct(value: unknown): value is Product {
  return typeof value === 'object' && value !== null && 'id' in value && typeof value.id === 'number' && 'title' in value && typeof value.title === 'string'
@@ -41,13 +59,18 @@ function isPriceAlerts(value: unknown): value is Record<string, number> {
 function App(){
  const [page,setPage]=useState<Page>('Overview')
  const [mobileOpen,setMobileOpen]=useState(false)
- const [listings,setListings]=useState<Product[]>(()=>readStored('marketpulse.listings',demoProducts,isArrayOf(isProduct)))
  const [importedDataset,setImportedDataset]=useState(()=>readStored('marketpulse.imported',false,isBoolean))
+ const [listings,setListings]=useState<Product[]>(()=>{
+  const imported=readStored('marketpulse.imported',false,isBoolean)
+  return imported?readStored('marketpulse.listings',[],isArrayOf(isProduct)):[]
+ })
+ const [liveAvailable,setLiveAvailable]=useState(false)
+ const [backendState,setBackendState]=useState<BackendState>({loading:true,error:'',overview:null,listings:[]})
  const [query,setQuery]=useState('')
  const [category,setCategory]=useState('All categories')
  const [location,setLocation]=useState('All Nigeria')
  const [sort,setSort]=useState('Most relevant')
- const [saved,setSaved]=useState<number[]>(()=>readStored('marketpulse.watchlist',[1,3],isNumberArray))
+ const [saved,setSaved]=useState<number[]>(()=>readStored('marketpulse.watchlist',[],isNumberArray))
  const [priceAlerts,setPriceAlerts]=useState<Record<string,number>>(()=>readStored('marketpulse.priceAlerts',{},isPriceAlerts))
  const [selected,setSelected]=useState<Product|null>(null)
  const [notice,setNotice]=useState('')
@@ -60,9 +83,22 @@ function App(){
  const [analysisStatus,setAnalysisStatus]=useState<{configured:boolean;model:string|null}>({configured:false,model:null})
  const [settings,setSettings]=useState<WorkspaceSettings>(()=>readStored('marketpulse.settings',{defaultMarket:'Nigeria',currency:'NGN',compactMode:false,weeklyDigest:false},isWorkspaceSettings))
 
- const filtered=useMemo(()=>listings.filter(p=>(category==='All categories'||p.category===category)&&(location==='All Nigeria'||p.location.toLowerCase().includes(location.toLowerCase()))&&([p.title,p.category,p.location,p.source,p.condition].some(value=>value.toLowerCase().includes(query.toLowerCase())))).sort((a,b)=>sort==='Price: low to high'?a.price-b.price:sort==='Price: high to low'?b.price-a.price:sort==='Most viewed'?b.views-a.views:sort==='Most relevant'?(b.views+b.saves)-(a.views+a.saves):b.trend-a.trend),[listings,query,category,location,sort])
- const trendCount=listings.filter(product=>product.trend>0).length
+ const liveProducts=useMemo(()=>backendState.listings.map(apiListingToProduct),[backendState.listings])
+ const dataMode:DataMode=importedDataset?'imported':liveAvailable?'live':listings.some(product=>product.verifiedDemo)?'demo':'empty'
+ const visibleListings=useMemo(()=>dataMode==='imported'||dataMode==='demo'?listings:dataMode==='live'?liveProducts:[],[dataMode,listings,liveProducts])
+ const filtered=useMemo(()=>visibleListings.filter(p=>(category==='All categories'||p.category===category)&&(location==='All Nigeria'||p.location.toLowerCase().includes(location.toLowerCase()))&&([p.title,p.category,p.location,p.source,p.condition].some(value=>value.toLowerCase().includes(query.toLowerCase())))).sort((a,b)=>sort==='Price: low to high'?a.price-b.price:sort==='Price: high to low'?b.price-a.price:sort==='Most viewed'?b.views-a.views:sort==='Most relevant'?(b.views+b.saves)-(a.views+a.saves):b.trend-a.trend),[visibleListings,query,category,location,sort])
+ const trendCount=visibleListings.filter(product=>product.trend>0).length
  const notify=(s:string)=>{setNotice(s);window.setTimeout(()=>setNotice(''),3000)}
+ const refreshBackend=useCallback(async()=>{
+  setBackendState(current=>({...current,loading:true,error:''}))
+  try{
+   const [overview,recent]=await Promise.all([getMarketOverview(),getRecentListings(50)])
+   setBackendState({loading:false,error:'',overview,listings:recent.items})
+   setLiveAvailable(true)
+  }catch(error){
+   setBackendState(current=>({...current,loading:false,error:error instanceof TypeError?`Could not reach ${API_BASE_URL}. Start the backend and check CORS settings.`:error instanceof Error?error.message:'Could not load backend market data.'}))
+  }
+ },[])
  const toggleSave=(id:number)=>setSaved(old=>{const next=old.includes(id)?old.filter(x=>x!==id):[...old,id];if(!writeStored('marketpulse.watchlist',next))notify('Could not save your watchlist in browser storage.');return next})
  const setPriceAlert=(id:number,threshold:number|null)=>{setPriceAlerts(old=>{const next={...old};if(threshold===null)delete next[String(id)];else next[String(id)]=threshold;if(!writeStored('marketpulse.priceAlerts',next))notify('Could not save your price alert in browser storage.');return next})}
  const go=(p:Page)=>{setPage(p);setMobileOpen(false);setSelected(null)}
@@ -71,13 +107,14 @@ function App(){
  const importFile=async(file:File)=>{try{if(file.size>10_000_000)throw new Error('This CSV is larger than 10 MB. Split it into smaller imports.');const imported=parseListingsCsv(await file.text());if(!window.confirm(`Import ${imported.length} listings and replace the current dataset?`))return;if(!writeStored('marketpulse.listings',imported)||!writeStored('marketpulse.imported',true)||!writeStored('marketpulse.watchlist',[])||!writeStored('marketpulse.priceAlerts',{}))throw new Error('The browser storage limit was reached.');setListings(imported);setImportedDataset(true);setSaved([]);setPriceAlerts({});setReport(false);setAnalysis(null);setLocalAnalysis(null);setAnalysisError('');setAnalysisConsent(false);setQuery('');setCategory('All categories');setLocation('All Nigeria');notify(`Imported ${imported.length} listings. Data stays in this browser.`)}catch(error){const message=error instanceof Error?error.message:'Could not read this CSV file.';notify(`Import failed: ${message}`)}}
  const restoreDemo=()=>{if(!writeStored('marketpulse.listings',demoProducts)||!writeStored('marketpulse.imported',false)||!writeStored('marketpulse.watchlist',[])||!writeStored('marketpulse.priceAlerts',{})){notify('Could not save this change in browser storage.');return}setListings(demoProducts);setImportedDataset(false);setSaved([]);setPriceAlerts({});setReport(false);setAnalysis(null);setLocalAnalysis(null);setAnalysisError('');setAnalysisConsent(false);setQuery('');setCategory('All categories');setLocation('All Nigeria');notify('Demonstration dataset restored.')}
  const download=(filename:string,content:string,type:string)=>{const blob=new Blob([content],{type});const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=filename;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000)}
- const exportListings=()=>{download('marketpulse-listings.csv',toCsv(listings),'text/csv;charset=utf-8');notify(`Exported ${listings.length} listings.`)}
- const exportReport=()=>{download('marketpulse-market-snapshot.txt',buildMarketReport(listings,importedDataset),'text/plain;charset=utf-8');setReport(true);notify('Market snapshot report downloaded.')}
+ const exportListings=()=>{download('marketpulse-listings.csv',toCsv(visibleListings),'text/csv;charset=utf-8');notify(`Exported ${visibleListings.length} listings.`)}
+ const exportReport=()=>{download('marketpulse-market-snapshot.txt',buildMarketReport(visibleListings,dataMode==='live'?'Live collected data':dataMode==='imported'?'User-imported CSV':'Demonstration data'),'text/plain;charset=utf-8');setReport(true);notify('Market snapshot report downloaded.')}
  const downloadTemplate=()=>download('marketpulse-import-template.csv','title,category,price,location,source,previous_price,condition,listed,views,saves,trend,description\r\n','text/csv;charset=utf-8')
- const analyzeLocally=()=>{setLocalAnalysis(buildLocalAnalysis(listings));setAnalysisError('')}
- const analyzeDataset=async()=>{setAnalysis(null);setAnalysisError('');setAnalysisLoading(true);try{const payload:MarketAnalysisPayload=buildAnalysisPayload(listings);const response=await fetch(`${API_BASE_URL}/api/analysis`,{method:'POST',headers:{'Content-Type':'application/json',...(API_READ_TOKEN?{Authorization:`Bearer ${API_READ_TOKEN}`}:{})},body:JSON.stringify(payload)});const result=await response.json() as {analysis?:unknown;model?:unknown;detail?:unknown};if(!response.ok){const detail=typeof result.detail==='string'?result.detail:Array.isArray(result.detail)?result.detail.map(item=>typeof item==='object'&&item!==null&&'msg'in item?String(item.msg):'').filter(Boolean).join('; '):'';throw new Error(detail||`Analysis request failed (${response.status}).`)}if(typeof result.analysis!=='string'||typeof result.model!=='string')throw new Error('The analysis service returned an unexpected response.');setAnalysis({text:result.analysis,model:result.model})}catch(error){const message=error instanceof TypeError?`Could not reach the MarketPulse API at ${API_BASE_URL}. Start the backend and check CORS settings.`:error instanceof Error?error.message:'AI analysis failed unexpectedly.';setAnalysisError(message)}finally{setAnalysisLoading(false)}}
+ const analyzeLocally=()=>{setLocalAnalysis(buildLocalAnalysis(visibleListings));setAnalysisError('')}
+ const analyzeDataset=async()=>{setAnalysis(null);setAnalysisError('');setAnalysisLoading(true);try{const payload:MarketAnalysisPayload=buildAnalysisPayload(visibleListings);const response=await fetch(`${API_BASE_URL}/api/analysis`,{method:'POST',headers:{'Content-Type':'application/json',...(API_READ_TOKEN?{Authorization:`Bearer ${API_READ_TOKEN}`}:{})},body:JSON.stringify(payload)});const result=await response.json() as {analysis?:unknown;model?:unknown;detail?:unknown};if(!response.ok){const detail=typeof result.detail==='string'?result.detail:Array.isArray(result.detail)?result.detail.map(item=>typeof item==='object'&&item!==null&&'msg'in item?String(item.msg):'').filter(Boolean).join('; '):'';throw new Error(detail||`Analysis request failed (${response.status}).`)}if(typeof result.analysis!=='string'||typeof result.model!=='string')throw new Error('The analysis service returned an unexpected response.');setAnalysis({text:result.analysis,model:result.model})}catch(error){const message=error instanceof TypeError?`Could not reach the MarketPulse API at ${API_BASE_URL}. Start the backend and check CORS settings.`:error instanceof Error?error.message:'AI analysis failed unexpectedly.';setAnalysisError(message)}finally{setAnalysisLoading(false)}}
  const updateSettings=(next:WorkspaceSettings)=>{setSettings(next);if(!writeStored('marketpulse.settings',next))notify('Could not save workspace preferences in browser storage.')}
  useEffect(()=>{void getAnalysisStatus().then(status=>setAnalysisStatus({configured:status.configured,model:status.model})).catch(()=>setAnalysisStatus({configured:false,model:null}))},[])
+ useEffect(()=>{void refreshBackend()},[refreshBackend])
  useEffect(()=>{
   const handleShortcut=(event:KeyboardEvent)=>{
    if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){
@@ -89,30 +126,31 @@ function App(){
   return ()=>window.removeEventListener('keydown',handleShortcut)
  },[])
 
- return <div className={`app-shell ${settings.compactMode?'compact-mode':''}`}>
+  return <div className={`app-shell ${settings.compactMode?'compact-mode':''} ${dataMode}-mode`}>
   {mobileOpen&&<div className="mobile-scrim" onClick={()=>setMobileOpen(false)} />}
   <aside className={`sidebar ${mobileOpen?'sidebar-open':''}`}>
    <div className="brand"><div className="brand-mark"><Activity size={20}/></div><div><b>market<span>pulse</span></b><small>NIGERIA INTELLIGENCE</small></div><button aria-label="Close navigation" className="icon-btn close-nav" onClick={()=>setMobileOpen(false)}><X size={18}/></button></div>
    <div className="workspace-switch"><div className="workspace-avatar">MP</div><div><b>My workspace</b><small>Personal research</small></div><ChevronDown size={15}/></div>
-   {['WORKSPACE','INSIGHTS','MANAGE','SYSTEM'].map(group=><div className="nav-group" key={group}><p>{group}</p>{nav.filter(n=>n.group===group).map(n=><button key={n.label} onClick={()=>go(n.label)} className={`nav-item ${page===n.label?'active':''}`}><n.icon size={17}/><span>{n.label}</span>{n.label==='Trending'&&trendCount>0&&<i className="nav-count">{trendCount}</i>}</button>)}</div>)}
-   <div className="sidebar-bottom"><div className="source-health"><div className="health-icon"><ShieldCheck size={17}/></div><div><b>Data labeling</b><small>{importedDataset?'Imported · unverified':'Demo environment'}</small></div><span className="green-dot"/></div><div className="profile"><div className="profile-avatar">A</div><div><b>Arlo workspace</b><small>Local preview</small></div><MoreHorizontal size={18}/></div></div>
+   {['WORKSPACE','MANAGE','SYSTEM'].map(group=><div className="nav-group" key={group}><p>{group}</p>{nav.filter(n=>n.group===group&&primaryLabels.has(n.label)).map(n=><button key={n.label} onClick={()=>go(n.label)} className={`nav-item ${page===n.label?'active':''}`}><n.icon size={17}/><span>{n.label}</span></button>)}</div>)}
+   <div className="nav-group nav-more"><p>MORE TOOLS</p>{nav.filter(n=>!primaryLabels.has(n.label)).map(n=><button key={n.label} onClick={()=>go(n.label)} className={`nav-item ${page===n.label?'active':''}`}><n.icon size={17}/><span>{n.label}</span>{n.label==='Trending'&&trendCount>0&&<i className="nav-count">{trendCount}</i>}</button>)}</div>
+   <div className="sidebar-bottom"><div className="source-health"><div className="health-icon"><ShieldCheck size={17}/></div><div><b>Data status</b><small>{dataMode==='live'?'Live Jiji data':dataMode==='imported'?'Imported data':dataMode==='demo'?'Demo fallback':'Waiting for data'}</small></div><span className="green-dot"/></div><div className="profile"><div className="profile-avatar">A</div><div><b>Arlo workspace</b><small>Local preview</small></div><MoreHorizontal size={18}/></div></div>
   </aside>
   <main className="main-area">
    <header className="topbar"><button aria-label="Open navigation" className="icon-btn mobile-menu" onClick={()=>setMobileOpen(true)}><Menu/></button><div className="crumb"><span>Workspace</span><b>/</b><strong>{page}</strong></div><div className="top-actions"><div className="top-search"><Search size={15}/><input aria-label="Search products" placeholder="Search products, categories or locations..." value={query} onChange={e=>{setQuery(e.target.value);if(page!=='Products')setPage('Products')}}/><kbd>Ctrl K</kbd></div><button aria-label="Show notifications" className="icon-btn notification" onClick={()=>notify('Notifications are not configured for this local workspace.')}><Bell size={18}/><i/></button><div className="top-avatar">A</div></div></header>
    <div className="content">
-    <div className="page-heading"><div><div className="eyebrow"><span className="pulse-dot"/> MARKET INTELLIGENCE <span className="demo-tag">{importedDataset?'IMPORTED DATA':'DEMO DATA'}</span></div><h1>{pageTitle}</h1><p>{pageSub[page]}</p></div><div className="heading-actions">{page==='Overview'&&<span className="select compact">{listings.length} listings</span>}<button className="btn btn-secondary" onClick={exportListings}><Download size={15}/> Export CSV</button><button className="btn btn-primary" onClick={()=>go('Data sources')}><Upload size={15}/> Import data</button></div></div>
-    <div className="demo-banner"><span><CircleHelp size={16}/></span><div><b>{importedDataset?'You’re viewing user-imported data.':'You’re viewing demonstration data.'}</b> {importedDataset?'Imported records are not independently verified. Analysis is limited to the fields in your file.':'Figures and listings are illustrative only; no live marketplace source is connected.'} Data is stored locally in this browser.</div><button onClick={()=>go('Data sources')}>Manage data <ExternalLink size={13}/></button></div>
+    <div className="page-heading"><div><div className="eyebrow"><span className="pulse-dot"/> MARKET INTELLIGENCE <span className="demo-tag">{dataMode==='live'?'LIVE DATA':dataMode==='imported'?'IMPORTED DATA':dataMode==='demo'?'DEMO DATA':'NO DATA'}</span></div><h1>{pageTitle}</h1><p>{pageSub[page]}</p></div><div className="heading-actions">{page==='Overview'&&<span className="select compact">{dataMode==='live'&&backendState.overview?backendState.overview.active_listings.toLocaleString():visibleListings.length} listings</span>}<button className="btn btn-secondary" onClick={exportListings} disabled={!visibleListings.length}><Download size={15}/> Export CSV</button><button className="btn btn-primary" onClick={()=>go('Data sources')}><Upload size={15}/> Import data</button></div></div>
+    <div className="demo-banner"><span><CircleHelp size={16}/></span><div><b>{dataMode==='live'?'Live Jiji data is connected.':dataMode==='imported'?'You’re viewing user-imported data.':dataMode==='demo'?'You’re viewing demonstration data.':'No market dataset is connected yet.'}</b> {dataMode==='live'?(backendState.overview?`${backendState.overview.active_listings.toLocaleString()} active records are available in the backend; the workspace shows the latest collected rows.`:'The backend is loading collected records.') :dataMode==='imported'?'Imported records are not independently verified.':dataMode==='demo'?'Demo records are only for testing the interface.':'Start the backend to load approved Jiji records, or import a CSV file.'}</div><button onClick={()=>go(dataMode==='empty'?'Data sources':'Products')}>{dataMode==='empty'?'Connect data':'View listings'} <ExternalLink size={13}/></button></div>
 
-     {page==='Overview'&&<><BackendObservations/><Overview listings={listings} go={go} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/></>}
-     {page==='Products'&&<ProductsView listings={listings} filtered={filtered} query={query} setQuery={setQuery} category={category} setCategory={setCategory} location={location} setLocation={setLocation} sort={sort} setSort={setSort} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}
-     {page==='Trending'&&<TrendingView listings={listings} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}
-     {page==='Price intelligence'&&<PriceView listings={listings} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}
-    {page==='Opportunities'&&<OpportunityView listings={listings} setSelected={setSelected}/>}
-     {page==='Watchlist'&&<WatchlistView listings={listings} saved={saved} priceAlerts={priceAlerts} toggleSave={toggleSave} setSelected={setSelected}/>}
-    {page==='Data sources'&&<SourcesView importFile={importFile} importedDataset={importedDataset} restoreDemo={restoreDemo} listingsCount={listings.length} downloadTemplate={downloadTemplate}/>}
-     {page==='Reports'&&<ReportsView report={report} onGenerate={exportReport} importedDataset={importedDataset} analysis={analysis} localAnalysis={localAnalysis} analysisLoading={analysisLoading} analysisError={analysisError} analysisConsent={analysisConsent} setAnalysisConsent={setAnalysisConsent} onAnalyze={analyzeDataset} onAnalyzeLocally={analyzeLocally} openAiConfigured={analysisStatus.configured} openAiModel={analysisStatus.model}/>}
+     {page==='Overview'&&<><BackendObservations state={backendState} onRefresh={refreshBackend}/>{dataMode==='empty'?null:<Overview listings={visibleListings} go={go} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}</>}
+     {page==='Products'&&<ProductsView listings={visibleListings} filtered={filtered} query={query} setQuery={setQuery} category={category} setCategory={setCategory} location={location} setLocation={setLocation} sort={sort} setSort={setSort} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}
+     {page==='Trending'&&<TrendingView listings={visibleListings} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}
+     {page==='Price intelligence'&&<PriceView listings={visibleListings} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}
+    {page==='Opportunities'&&<OpportunityView listings={visibleListings} setSelected={setSelected}/>}
+     {page==='Watchlist'&&<WatchlistView listings={visibleListings} saved={saved} priceAlerts={priceAlerts} toggleSave={toggleSave} setSelected={setSelected}/>}
+    {page==='Data sources'&&<SourcesView importFile={importFile} importedDataset={importedDataset} dataMode={dataMode} restoreDemo={restoreDemo} listingsCount={visibleListings.length} downloadTemplate={downloadTemplate}/>}
+     {page==='Reports'&&<ReportsView report={report} onGenerate={exportReport} importedDataset={importedDataset||dataMode==='live'} analysis={analysis} localAnalysis={localAnalysis} analysisLoading={analysisLoading} analysisError={analysisError} analysisConsent={analysisConsent} setAnalysisConsent={setAnalysisConsent} onAnalyze={analyzeDataset} onAnalyzeLocally={analyzeLocally} openAiConfigured={analysisStatus.configured} openAiModel={analysisStatus.model}/>}
      {page==='Settings'&&<SettingsView settings={settings} onChange={updateSettings} notify={notify}/>}
-    <footer><span>© 2026 MarketPulse</span><span><i className="green-dot"/> Local workspace <b>·</b> {importedDataset?'Imported dataset':'Demo dataset'}</span><span>Built for Nigeria's resale economy</span></footer>
+    <footer><span>© 2026 MarketPulse</span><span><i className="green-dot"/> {dataMode==='live'?'Live Jiji data':dataMode==='imported'?'Imported dataset':dataMode==='demo'?'Demo fallback':'No data connected'}</span><span>Built for Nigeria's resale economy</span></footer>
    </div>
   </main>
    {selected&&<ProductModal product={selected} saved={saved.includes(selected.id)} alertThreshold={priceAlerts[String(selected.id)]??null} onSave={()=>toggleSave(selected.id)} onSetAlert={threshold=>setPriceAlert(selected.id,threshold)} onClose={()=>setSelected(null)}/>}
@@ -120,18 +158,8 @@ function App(){
  </div>
 }
 
-function BackendObservations(){
- const [state,setState]=useState<{loading:boolean;error:string;overview:MarketOverview|null;listings:ApiListing[]}>({loading:true,error:'',overview:null,listings:[]})
- const refresh=useCallback(async()=>{
-  setState(current=>({...current,loading:true,error:''}))
-  try{
-   const [overview,recent]=await Promise.all([getMarketOverview(),getRecentListings()])
-   setState({loading:false,error:'',overview,listings:recent.items})
-  }catch(error){
-   setState(current=>({loading:false,error:error instanceof TypeError?`Could not reach ${API_BASE_URL}. Start the backend and check CORS settings.`:error instanceof Error?error.message:'Could not load backend market data.',overview:current.overview,listings:current.listings}))
-  }
- },[])
- useEffect(()=>{void refresh()},[refresh])
+function BackendObservations({state,onRefresh}:{state:BackendState;onRefresh:()=>void}){
+ const refresh=onRefresh
  if(state.loading&&!state.overview)return <section className="panel backend-observations"><div className="panel-head"><div><span className="eyebrow">DATABASE OBSERVATIONS</span><h3>Loading collected market data…</h3></div></div></section>
  if(!state.overview)return <section className="panel backend-observations"><div className="panel-head"><div><span className="eyebrow">DATABASE OBSERVATIONS</span><h3>Backend market data unavailable</h3></div><button className="btn btn-secondary" onClick={()=>void refresh()} disabled={state.loading}>{state.loading?'Refreshing…':'Retry'}</button></div><div className="analysis-error" role="alert">{state.error}</div></section>
 
@@ -206,7 +234,7 @@ function WatchlistView({listings,saved,priceAlerts,toggleSave,setSelected}:{list
  const alertCount=items.filter(item=>priceAlerts[String(item.id)]!==undefined).length
  return <div className="panel table-panel"><div className="panel-head"><div><h3>Saved products</h3><p>{items.length} products in your personal watchlist · {alertCount} price alert{alertCount===1?'':'s'}</p></div></div>{items.length?<ProductTable items={items} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>:<div className="empty-state"><Bookmark size={28}/><b>Your watchlist is empty</b><span>Save products from the explorer to track them here.</span></div>}</div>
 }
-function SourcesView({importFile,importedDataset,restoreDemo,listingsCount,downloadTemplate}:{importFile:(file:File)=>void;importedDataset:boolean;restoreDemo:()=>void;listingsCount:number;downloadTemplate:()=>void}){
+function SourcesView({importFile,importedDataset,dataMode,restoreDemo,listingsCount,downloadTemplate}:{importFile:(file:File)=>void;importedDataset:boolean;dataMode:DataMode;restoreDemo:()=>void;listingsCount:number;downloadTemplate:()=>void}){
  const [apiState,setApiState]=useState<{loading:boolean;error:string;sources:MarketplaceSource[]}>({loading:true,error:'',sources:[]})
  const refreshApi=async()=>{
   setApiState(current=>({...current,loading:true,error:''}))
@@ -221,7 +249,7 @@ function SourcesView({importFile,importedDataset,restoreDemo,listingsCount,downl
  useEffect(()=>{void refreshApi()},[])
  return <>
   <div className="source-intro"><div><div className="source-intro-icon"><Database/></div><h2>Bring in authorized market data</h2><p>Import a CSV export from a source you are permitted to access. CSV files stay in this browser. Server-side collection uses only enabled, approved connectors and never runs in the browser.</p><div className="source-actions"><label className="btn btn-primary csv-upload"><Upload size={15}/> Import listings CSV<input className="csv-file-input" type="file" accept=".csv,text/csv" onChange={event=>{const file=event.target.files?.[0];if(file){void importFile(file);event.target.value=''}}}/></label><button className="btn btn-secondary" onClick={downloadTemplate}><Download size={15}/> Download CSV template</button></div></div></div>
-  <div className="source-cards"><div className="panel source-card"><div className="source-card-top"><div className="source-logo large"><Upload/></div><span className="status-pill status-active">Ready</span></div><h3>CSV import</h3><p>Replace the current workspace dataset with normalized listing rows.</p><div className="source-detail"><span>Current dataset</span><b>{importedDataset?'Imported CSV':'Demonstration data'}</b></div><div className="source-detail"><span>Listings loaded</span><b>{listingsCount}</b></div><details className="csv-help"><summary>Required columns and supported fields</summary><p>Required: <code>title</code>, <code>category</code>, <code>price</code> (or <code>asking_price</code>), <code>location</code>, and <code>source</code> (or <code>source_name</code>).</p><p>Optional: <code>previous_price</code>, <code>condition</code>, <code>listed</code> (or <code>observed_at</code>), <code>views</code>, <code>saves</code>, <code>trend</code>, and <code>description</code>. Quote comma-containing values such as prices.</p></details>{importedDataset&&<button className="btn btn-secondary full-btn" onClick={restoreDemo}>Restore demonstration dataset</button>}</div></div>
+  <div className="source-cards"><div className="panel source-card"><div className="source-card-top"><div className="source-logo large"><Upload/></div><span className="status-pill status-active">Ready</span></div><h3>CSV import</h3><p>Replace the current workspace dataset with normalized listing rows.</p><div className="source-detail"><span>Current dataset</span><b>{dataMode==='live'?'Live Jiji data':dataMode==='imported'?'Imported CSV':dataMode==='demo'?'Demonstration data':'No dataset loaded'}</b></div><div className="source-detail"><span>Listings loaded</span><b>{listingsCount}</b></div><details className="csv-help"><summary>Required columns and supported fields</summary><p>Required: <code>title</code>, <code>category</code>, <code>price</code> (or <code>asking_price</code>), <code>location</code>, and <code>source</code> (or <code>source_name</code>).</p><p>Optional: <code>previous_price</code>, <code>condition</code>, <code>listed</code> (or <code>observed_at</code>), <code>views</code>, <code>saves</code>, <code>trend</code>, and <code>description</code>. Quote comma-containing values such as prices.</p></details>{importedDataset&&<button className="btn btn-secondary full-btn" onClick={restoreDemo}>Restore demonstration dataset</button>}</div></div>
   <section className="panel source-card source-catalog"><div className="source-card-top"><div><h3>Backend source catalog</h3><p>Permission and connector status reported by the configured MarketPulse API.</p></div><button className="btn btn-secondary" onClick={()=>void refreshApi()} disabled={apiState.loading}>{apiState.loading?'Checking…':'Refresh status'}</button></div>{apiState.error&&<div className="analysis-error" role="alert">{apiState.error}</div>}{apiState.loading&&!apiState.sources.length&&!apiState.error&&<p>Checking API and database…</p>}{!apiState.loading&&!apiState.error&&apiState.sources.length===0&&<div className="empty-state"><Database size={22}/><span>No marketplace sources are configured.</span></div>}{apiState.sources.map(source=><div className="source-detail source-catalog-row" key={source.source_key}><span><b>{source.name}</b><small>{source.access_method} · permission {source.permission_status}{source.permission_reference_present?' · reference recorded':''}</small><small>{source.connector_available?'Connector registered':'No connector registered'} · {source.permitted_categories.length?source.permitted_categories.join(', '):'no approved categories'}</small></span><span className={`status-pill ${source.enabled&&source.connector_available?'status-active':'status-pending'}`}>{source.enabled&&source.connector_available?'Enabled':'Disabled'}</span></div>)}</section>
   <div className="callout-note"><ShieldCheck size={17}/><span>Respect source terms, rate limits and data-use permissions. The Jiji connector checks robots.txt, stays disabled until explicitly approved, and does not collect seller contact details. Imported data is not independently verified.</span></div>
  </>
