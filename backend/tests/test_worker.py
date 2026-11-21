@@ -109,3 +109,24 @@ class WorkerTests(unittest.TestCase):
             jobs = worker.claim_due_jobs(now)
 
         self.assertEqual(jobs, [])
+
+    def test_worker_skips_enabled_source_without_connector(self) -> None:
+        now = datetime.now(timezone.utc)
+
+        with patch.object(worker, "engine", self.engine), patch.object(
+            worker.connector_registry, "get", return_value=None
+        ):
+            jobs = worker.claim_due_jobs(now)
+
+        self.assertEqual(jobs, [])
+        with Session(self.engine) as session:
+            source = session.get(MarketplaceSource, 1)
+            runs = session.exec(select(CollectionRun)).all()
+
+        self.assertIsNotNone(source)
+        assert source is not None
+        next_run_at = source.next_run_at
+        if next_run_at.tzinfo is None:
+            next_run_at = next_run_at.replace(tzinfo=timezone.utc)
+        self.assertGreater(next_run_at, now)
+        self.assertEqual(runs, [])

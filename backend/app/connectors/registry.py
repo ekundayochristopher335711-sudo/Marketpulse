@@ -1,5 +1,10 @@
 from .base import MarketplaceConnector
+from .aae import AaeConnector
+from .enytinplus import EnytinPlusConnector
+from .facebook_marketplace import FacebookMarketplaceConnector
+from .jax import JaxConnector
 from .jiji import JijiConnector
+from .naijabargains import NaijaBargainsConnector
 
 
 class ConnectorRegistry:
@@ -20,4 +25,9 @@ class ConnectorRegistry:
 
 
 connector_registry = ConnectorRegistry()
+connector_registry.register(AaeConnector)
+connector_registry.register(EnytinPlusConnector)
+connector_registry.register(FacebookMarketplaceConnector)
+connector_registry.register(JaxConnector)
 connector_registry.register(JijiConnector)
+connector_registry.register(NaijaBargainsConnector)

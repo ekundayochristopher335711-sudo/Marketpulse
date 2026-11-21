@@ -54,7 +54,7 @@ python -m app.worker
 ```
 The worker only schedules sources that are enabled, marked approved, and have a registered connector. The source catalog starts with every platform disabled and permission status `unknown`. A shared admin token protects `PUT /api/admin/sources/{source_id}` and `GET /api/admin/audit`; an ingestion token protects `POST /api/listings`. The API refuses to enable a source without a connector, an explicit permission reference, categories, fields, and an allowed access method. Never set these values based only on the fact that a page is publicly reachable.
 
-The Jiji web adapter is registered but remains disabled and unapproved by default. It checks `robots.txt` and, when explicitly enabled, reads only the first public results page of each approved category. It excludes seller profiles/contact details and does not infer a listing is expired when it disappears from the first page. The current connector is a bounded first-page integration, not full-site coverage; it is not run by tests. The worker and database record source-scoped collection runs, and the adapter will not follow redirects or access login/admin/anti-bot paths.
+The backend registers bounded adapters for Jiji, AAE.NG, EnytinPlus, Jax.ng, NaijaBargains, and Facebook Marketplace. They check `robots.txt`, use only public source endpoints/pages allowed by the recorded authorization scope, preserve stable listing identity, and omit seller profiles/contact details. AAE uses its public vehicle function, EnytinPlus its public shop page, Jax its public ads page, NaijaBargains its public homepage because its robots file disallows `/api/`, and Facebook Marketplace uses Meta Content Library's official API. Facebook also requires a server-only `MARKETPULSE_FACEBOOK_ACCESS_TOKEN`; a normal Facebook login is not substituted for that credential. These are bounded first-page/first-response integrations, not full-site coverage, and the worker does not follow redirects or access login/admin/anti-bot paths.
 
 The Overview page also reads database-backed market metrics and a small page of active listings from the API, kept visibly separate from the local demo/imported workspace. The Data Sources page reads API health and the non-secret source catalog. Neither view configures permissions, enables a connector, nor starts collection.
 
@@ -82,7 +82,7 @@ Imported listings, the watchlist, price alerts, and workspace preferences are st
 When AI analysis is requested, only aggregate statistics and category labels go to OpenAI. The Responses API request disables application-state storage, but OpenAI's API data-retention policies may still apply; review the provider's current data controls before sending sensitive aggregates.
 
 ## Still not connected
-- Jiji is the only registered connector; it remains idle until an operator records its permission reference and exact scope, then approves and enables it. Other sources have no adapter.
+- The connectors are registered and tested, but collection still depends on each source being approved/enabled in the database. Facebook additionally remains operationally blocked until Meta Content Library credentials are supplied in the backend environment.
 - Imported CSV data remains in browser storage; it is not synchronized to the API or shared between devices.
 - The database-backed Overview is read-only and shows only records already ingested into the backend; it does not merge them into the local workspace dataset.
 - The database can store price observations, but there are no live observations, verified transactions, or independently collected demand signals yet.
@@ -92,8 +92,8 @@ When AI analysis is requested, only aggregate statistics and category labels go 
 These require approved source access, deployment, server-side credentials, persistent backend storage, and a background worker. The app deliberately avoids presenting mock data as real.
 
 ## Suggested next implementation sequence
-1. Record the written authorization reference and verify the exact permitted categories, fields, request interval, and retention with the source/operator.
-2. Expand and fixture-test Jiji's authorized first-page adapter only as needed; pagination is intentionally not implemented until its page behavior and scope are confirmed.
+1. Record the written authorization reference and verify the exact permitted categories, fields, request interval, and retention with each source/operator.
+2. Add the Facebook Content Library token to the backend environment if Facebook collection is in scope; never put it in frontend variables.
 3. Configure managed PostgreSQL with `DATABASE_URL`, apply Alembic migrations, and back up the database.
 4. Deploy the frontend, API, and persistent worker as separate services; configure CORS and server-only secrets.
 5. Add account authentication, per-user permissions, and rate limits before enabling remote AI or browser-accessible ingestion/admin operations.

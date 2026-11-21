@@ -98,9 +98,14 @@ def claim_due_jobs(now: datetime | None = None) -> list[CollectionJob]:
             connector_type = connector_registry.get(source.source_key)
             if connector_type is None:
                 logger.error(
-                    "Enabled source %s has no registered connector; no requests were made.",
+                    "Enabled source %s has no registered connector; no requests were made until its connector is installed.",
                     source.source_key,
                 )
+                source.next_run_at = current_time + timedelta(
+                    seconds=source.minimum_interval_seconds
+                )
+                session.add(source)
+                session.commit()
                 continue
 
             run = CollectionRun(

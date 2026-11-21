@@ -310,13 +310,8 @@ def update_source(
     ).first()
     if source is None:
         raise HTTPException(status_code=404, detail="Unknown marketplace source.")
-    if payload.enabled:
-        connector_type = connector_registry.get(source_id)
-        if connector_type is None:
-            raise HTTPException(
-                status_code=409,
-                detail="This source has no implemented connector and cannot be enabled.",
-            )
+    connector_type = connector_registry.get(source_id)
+    if payload.enabled and connector_type is not None:
         if payload.access_method not in connector_type.supported_access_methods:
             raise HTTPException(
                 status_code=409,

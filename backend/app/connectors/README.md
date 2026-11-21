@@ -14,7 +14,9 @@ Suggested interface:
 - `normalize(raw: RawListing) -> ListingPayload`
 - `healthcheck() -> ConnectorStatus`
 
-The Jiji adapter is registered, but every source starts disabled and unapproved.
+The registry contains bounded adapters for Jiji, AAE.NG, EnytinPlus, Jax.ng,
+NaijaBargains, and Facebook Marketplace. Database approval and enablement are
+still required before any adapter can make a request.
 
 The shared contract lives in `base.py` and the registry in `registry.py`. A connector must subclass `MarketplaceConnector`, implement `discover_listings()`
 and `healthcheck()`, and use `self.request()` for every outbound HTTP request.
@@ -27,12 +29,18 @@ restart. It does not activate a source unless its connector is registered and it
 database permission state is both approved and enabled. Keep credentials in the
 backend environment; never put marketplace tokens in the frontend.
 
-The Jiji adapter checks `robots.txt` before each run and collects only the first
-result page of each explicitly permitted category. It stores listing title,
-category, asking price, condition, listing URL, and coarse location; it does not
-collect seller profiles or contact details. It does not paginate or infer that a
-listing is expired when it disappears from the first page. Adapter behavior is
-covered by offline HTML/robots fixtures; tests do not contact Jiji.
+All adapters are bounded first-page/public-endpoint integrations. They check
+`robots.txt`, respect the configured request interval, preserve a stable source
+listing ID or URL, and omit seller profiles/contact details. The AAE adapter
+uses AAE's own public vehicle function; EnytinPlus uses its public shop page;
+Jax uses its public ads page; NaijaBargains uses its public homepage because
+its robots file disallows `/api/`; and Facebook Marketplace uses Meta Content
+Library's official API and therefore needs `MARKETPULSE_FACEBOOK_ACCESS_TOKEN`.
+None of them bypasses login, CAPTCHA, paywalls, or anti-bot controls.
+
+The AAE, EnytinPlus, Jax, NaijaBargains, and Facebook parsers are covered by
+offline fixtures in `backend/tests/test_marketplace_connectors.py`; tests do
+not contact marketplaces.
 
 For approved dynamic collection environments, set
 `MARKETPULSE_JIJI_PLAYWRIGHT=1`. This uses a headless Chromium page to render
