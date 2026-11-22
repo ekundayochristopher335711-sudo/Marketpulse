@@ -1,6 +1,7 @@
 param(
     [string]$ApiBaseUrl = "https://marketpulse-vdwt.onrender.com",
-    [string]$PermissionReference = "owner-confirmed-approval-2026-11-23"
+    [string]$PermissionReference = "owner-confirmed-approval-2026-11-23",
+    [switch]$UseClipboard
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,9 +26,13 @@ if ($health.status -ne "ok") {
     throw "The hosted API did not report status ok."
 }
 
-$adminToken = Read-PlainSecret "Paste MARKETPULSE_ADMIN_TOKEN (input stays hidden)"
+$adminToken = if ($UseClipboard) {
+    (Get-Clipboard -Raw).Trim()
+} else {
+    Read-PlainSecret "Paste MARKETPULSE_ADMIN_TOKEN (input stays hidden)"
+}
 if ([string]::IsNullOrWhiteSpace($adminToken)) {
-    throw "An admin token is required."
+    throw "An admin token is required. Copy the token first, then rerun with -UseClipboard."
 }
 
 $categories = @(
