@@ -27,7 +27,11 @@ if ($health.status -ne "ok") {
 }
 
 $adminToken = if ($UseClipboard) {
-    (Get-Clipboard -Raw).Trim()
+    $clipboard = (Get-Clipboard -Raw).Trim()
+    if ($clipboard -match '(?m)^\s*MARKETPULSE_ADMIN_TOKEN\s*=\s*(.+?)\s*$') {
+        $clipboard = $Matches[1]
+    }
+    ($clipboard -replace '\s', '').Trim()
 } else {
     Read-PlainSecret "Paste MARKETPULSE_ADMIN_TOKEN (input stays hidden)"
 }
