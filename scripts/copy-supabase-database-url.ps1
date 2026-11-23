@@ -42,16 +42,26 @@ try {
         $databaseUri = $poolerUri
     }
 
-    $parsedUri = [Uri]$databaseUri
-    $userInfo = $parsedUri.UserInfo.Split(":", 2)
-    if ($userInfo.Count -lt 2) {
-        throw "The URI must include the database username and password."
+    $connectionMatch = [regex]::Match(
+        $databaseUri,
+        '^(?<scheme>postgres(?:ql)?):\/\/(?<userinfo>[^@\/?#]+)@(?<host>[^:\/?#]+):(?<port>\d+)(?<path>\/[^?#]*)?(?<query>\?[^#]*)?$'
+    )
+    if (-not $connectionMatch.Success) {
+        throw "This is not a complete PostgreSQL URI. Copy the full URI from Supabase Connect > Session pooler."
     }
-    $databaseUsername = [Uri]::UnescapeDataString($userInfo[0])
-    if ($parsedUri.Host -notlike "*.pooler.supabase.com" -or
-        $parsedUri.Port -ne 5432 -or
-        $databaseUsername -notlike "*$projectRef*" -or
-        [string]::IsNullOrWhiteSpace($userInfo[1])) {
+
+    $userInfo = $connectionMatch.Groups["userinfo"].Value
+    $passwordSeparator = $userInfo.IndexOf(":")
+    if ($passwordSeparator -lt 1 -or $passwordSeparator -eq ($userInfo.Length - 1)) {
+        throw "The Session pooler URI must include its username and database-password placeholder."
+    }
+
+    $databaseUsername = [Uri]::UnescapeDataString($userInfo.Substring(0, $passwordSeparator))
+    $poolerHost = $connectionMatch.Groups["host"].Value
+    $poolerPort = [int]$connectionMatch.Groups["port"].Value
+    if ($poolerHost -notlike "*.pooler.supabase.com" -or
+        $poolerPort -ne 5432 -or
+        $databaseUsername -notlike "*$projectRef*") {
         throw "The URI must be the Session pooler URI for the MarketPulse project."
     }
 
