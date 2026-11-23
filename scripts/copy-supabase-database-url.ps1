@@ -107,13 +107,20 @@ try {
     Write-Host ""
     Write-Host "Vercel production DATABASE_URL is saved. The same value is copied for GitHub Actions."
     Write-Host "In GitHub, open Marketpulse → Settings → Secrets and variables → Actions → New repository secret."
-    Write-Host "Name it DATABASE_URL and paste the copied value. Return here after saving; the clipboard will be cleared."
+    Write-Host "Name it DATABASE_URL and paste the copied value. Return here after saving; the clipboard value will be overwritten."
     Read-Host "Press Enter after saving the GitHub secret" | Out-Null
 }
 finally {
     if ($clipboardUpdated) {
-        Set-Clipboard -Value ""
-        Write-Host "Clipboard cleared."
+        try {
+            # Windows PowerShell 5.1 treats an empty string as a null clipboard
+            # value. Replace the sensitive URL with harmless whitespace instead.
+            Set-Clipboard -Value " " -ErrorAction Stop
+            Write-Host "Sensitive clipboard value removed."
+        }
+        catch {
+            Write-Warning "Could not overwrite the clipboard automatically. Copy harmless text to remove the database URL from it."
+        }
     }
     if ($bstr -ne [IntPtr]::Zero) {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
