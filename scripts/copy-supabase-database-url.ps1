@@ -11,30 +11,47 @@ if ($UseClipboard) {
 else {
     $poolerUri = Read-Host "Paste the Supabase Session pooler URI as shown, with its password placeholder"
 }
-$placeholders = @("[YOUR-DATABASE-PASSWORD]", "[YOUR-PASSWORD]", "YOUR-DATABASE-PASSWORD", "YOUR-PASSWORD")
-$passwordPlaceholder = $placeholders | Where-Object { $poolerUri.Contains($_) } | Select-Object -First 1
-if ([string]::IsNullOrWhiteSpace($poolerUri) -or $null -eq $passwordPlaceholder) {
-    throw "Copy the Session pooler URI as shown, leaving its database-password placeholder in place."
-}
-
-$securePassword = Read-Host "Supabase database password (input hidden)" -AsSecureString
-if ($securePassword.Length -lt 1) {
-    $securePassword.Dispose()
-    throw "Enter the database password set for this Supabase project."
-}
-
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+$poolerUri = ([string]$poolerUri).Trim().Trim('"').Trim("'")
+$placeholderPattern = '(?i)(\[(?:YOUR[-_ ]?)?(?:DATABASE[-_ ]?)?PASSWORD\]|<(?:YOUR[-_ ]?)?(?:DATABASE[-_ ]?)?PASSWORD>|(?:YOUR[-_ ]?)?(?:DATABASE[-_ ]?)?PASSWORD)'
+$passwordPlaceholder = [regex]::Match($poolerUri, $placeholderPattern)
+$securePassword = $null
+$bstr = [IntPtr]::Zero
 $databaseUri = $null
 $passwordText = $null
 $escapedPassword = $null
 $clipboardUpdated = $false
 try {
-    $passwordText = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-    $escapedPassword = [Uri]::EscapeDataString($passwordText)
-    $databaseUri = $poolerUri.Replace($passwordPlaceholder, $escapedPassword)
+    if ([string]::IsNullOrWhiteSpace($poolerUri)) {
+        throw "Copy the Session pooler URI from Supabase Connect."
+    }
+
+    if ($passwordPlaceholder.Success) {
+        $securePassword = Read-Host "Supabase database password (input hidden)" -AsSecureString
+        if ($securePassword.Length -lt 1) {
+            throw "Enter the database password set for this Supabase project."
+        }
+
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+        $passwordText = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        $escapedPassword = [Uri]::EscapeDataString($passwordText)
+        $databaseUri = [regex]::new($placeholderPattern).Replace($poolerUri, $escapedPassword, 1)
+    }
+    else {
+        # Some dashboard copy actions include an already-filled password. Accept it
+        # without printing or prompting for it; validation below still checks scope.
+        $databaseUri = $poolerUri
+    }
+
     $parsedUri = [Uri]$databaseUri
+    $userInfo = $parsedUri.UserInfo.Split(":", 2)
+    if ($userInfo.Count -lt 2) {
+        throw "The URI must include the database username and password."
+    }
+    $databaseUsername = [Uri]::UnescapeDataString($userInfo[0])
     if ($parsedUri.Host -notlike "*.pooler.supabase.com" -or
-        [Uri]::UnescapeDataString($parsedUri.UserInfo.Split(":")[0]) -notlike "*$projectRef*") {
+        $parsedUri.Port -ne 5432 -or
+        $databaseUsername -notlike "*$projectRef*" -or
+        [string]::IsNullOrWhiteSpace($userInfo[1])) {
         throw "The URI must be the Session pooler URI for the MarketPulse project."
     }
 
@@ -51,16 +68,27 @@ try {
         $databaseUri = $databaseUri + $separator + "sslmode=require"
     }
 
-    $vercelOutput = @(
-        $databaseUri | & vercel.cmd env add DATABASE_URL `
-            --environment production `
-            --type secret `
-            --force `
-            --yes `
-            --scope arlotech `
-            --project marketpulse-nigeria 2>&1
-    )
-    if ($LASTEXITCODE -ne 0) {
+    # Windows PowerShell 5.1 converts native CLI stderr into NativeCommandError.
+    # Capture it with Continue so Vercel's banner does not abort the helper after
+    # the environment variable has already been saved.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $vercelOutput = @(
+            $databaseUri | & vercel.cmd env add DATABASE_URL `
+                --environment production `
+                --type secret `
+                --force `
+                --yes `
+                --scope arlotech `
+                --project marketpulse-nigeria 2>&1
+        )
+        $vercelExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($vercelExitCode -ne 0) {
         throw "Vercel could not save DATABASE_URL. Check that the Vercel CLI is installed and signed in to arlotech."
     }
 
@@ -77,12 +105,14 @@ finally {
         Set-Clipboard -Value ""
         Write-Host "Clipboard cleared."
     }
-    if ($null -ne $bstr) {
+    if ($bstr -ne [IntPtr]::Zero) {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
     }
     $databaseUri = $null
     $passwordText = $null
     $escapedPassword = $null
     $poolerUri = $null
-    $securePassword.Dispose()
+    if ($null -ne $securePassword) {
+        $securePassword.Dispose()
+    }
 }
