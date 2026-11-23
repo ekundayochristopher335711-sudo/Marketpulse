@@ -1,5 +1,5 @@
 param(
-    [string]$ApiBaseUrl = "https://marketpulse-vdwt.onrender.com",
+    [string]$ApiBaseUrl = "https://marketpulse-nigeria-pi.vercel.app",
     [string]$PermissionReference = "owner-confirmed-approval-2026-11-23",
     [switch]$UseClipboard,
     [switch]$UseEnvFile

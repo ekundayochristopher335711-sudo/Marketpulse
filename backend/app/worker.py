@@ -1,4 +1,5 @@
 import asyncio
+import argparse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
@@ -232,11 +233,16 @@ async def run_due_jobs_once() -> int:
     return len(jobs)
 
 
-async def run_worker() -> None:
+async def run_worker(once: bool = False) -> None:
     recovered = recover_interrupted_runs()
     if recovered:
         logger.warning("Marked %s interrupted collection runs as failed.", recovered)
     logger.info("MarketPulse collection worker started.")
+    if once:
+        started = await run_due_jobs_once()
+        logger.info("Single collection cycle finished. Jobs started: %s.", started)
+        return
+
     while True:
         try:
             await run_due_jobs_once()
@@ -246,8 +252,15 @@ async def run_worker() -> None:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run the MarketPulse collection worker.")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run one due-source collection cycle and exit.",
+    )
+    arguments = parser.parse_args()
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    asyncio.run(run_worker())
+    asyncio.run(run_worker(once=arguments.once))

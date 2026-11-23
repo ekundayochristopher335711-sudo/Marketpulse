@@ -17,10 +17,13 @@ def parse_ngn_price(value: object) -> int | None:
     """Parse a displayed naira amount while rejecting contact/POA prices."""
     if value is None:
         return None
-    digits = re.sub(r"\D", "", str(value))
-    if not digits:
+    # A price range such as "₦80,000 - ₦100,000" is not one asking price.
+    # Parse one grouped number and skip ambiguous text instead of concatenating
+    # both amounts into an unrealistic value.
+    matches = re.findall(r"(?<!\d)(?:\d{1,3}(?:[ ,]\d{3})+|\d+)(?!\d)", str(value))
+    if len(matches) != 1:
         return None
-    amount = int(digits)
+    amount = int(re.sub(r"\D", "", matches[0]))
     if amount <= 0 or amount > MAX_LISTING_PRICE_NGN:
         return None
     return amount

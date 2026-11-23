@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, Float, Index, String, Text
+from sqlalchemy import BigInteger, Column, DateTime, Float, Index, String, Text
 from sqlmodel import Field, SQLModel
 
 
@@ -44,7 +44,7 @@ class Listing(SQLModel, table=True):
     subcategory: Optional[str] = Field(default=None, max_length=120)
     brand: Optional[str] = Field(default=None, max_length=120)
     model: Optional[str] = Field(default=None, max_length=120)
-    asking_price: int
+    asking_price: int = Field(sa_column=Column(BigInteger, nullable=False))
     currency: str = Field(default="NGN", max_length=3)
     location: str = Field(max_length=200)
     state: Optional[str] = Field(default=None, max_length=100)
@@ -76,7 +76,7 @@ class PriceObservation(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     listing_id: int = Field(foreign_key="listing.id", index=True)
-    asking_price: int
+    asking_price: int = Field(sa_column=Column(BigInteger, nullable=False))
     currency: str = Field(default="NGN", max_length=3)
     observed_at: datetime = Field(default_factory=utc_now, sa_type=DateTime(timezone=True))
 

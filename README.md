@@ -42,31 +42,65 @@ uvicorn app.main:app --reload --port 8000
 ```
 API docs: http://localhost:8000/docs
 
-### Publish collected data to the hosted app for free
+### Scheduled production collection without Render
 
-With the hosted API sources configured, put the matching Render values for
-`MARKETPULSE_READ_TOKEN` and `MARKETPULSE_INGEST_TOKEN` in the **project root**
-`.env` (never commit them). Then run:
+The production web app and API share the Vercel project. Supabase holds the
+durable database. GitHub Actions runs one collection pass twice a day at 03:17
+and 15:17 Nigeria time, plus on demand from the repository's **Actions** tab.
+The scheduled worker connects directly to Supabase, so a computer does not need
+to stay on.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\publish-live-data.ps1
-```
+Before collection can run, add a repository Actions secret named `DATABASE_URL`
+with the Supabase Session Pooler PostgreSQL URI. Add it under GitHub **Settings
+→ Secrets and variables → Actions**. The workflow applies pending migrations,
+installs Chromium for the authorized NaijaBargains connector, and runs the
+enabled due sources once. Facebook remains off until its approved API token is
+configured as the `MARKETPULSE_FACEBOOK_ACCESS_TOKEN` Actions secret and enabled
+in the database. Keep all database and marketplace credentials out of frontend
+variables and Git.
 
-This starts the local collection worker if one is not already running and
-publishes recent real records to Render every five minutes. It sends up to 100
-recent records per enabled source each cycle, preserves observation dates, and
-skips unchanged records. Keep the computer and terminal on for updates. Ctrl+C
-stops publishing and any worker started by this launcher. Existing worker
-processes are left running. To publish one batch only, add `-Once`.
+On a private GitHub Free repository, scheduled minutes use the plan's included
+compute allowance. The schedule is intentionally twice daily; if the account's
+allowance is exhausted, GitHub blocks further private-runner use unless paid
+usage is enabled. Public repositories use standard runners free of charge.
 
-The connector request spacing and approved source/category/field limits still
-apply. Independent sources run concurrently so a slower source does not block
-the rest. Facebook is skipped while disabled. Local database records remain on
-the computer as a separate copy; this is not a complete backup/restore system.
+### Move the local database to Supabase
 
-Render Free has an ephemeral filesystem: hosted SQLite records and source
-settings can disappear on sleep, restart, or redeploy. Use managed PostgreSQL
-for durable hosted storage before relying on the app long-term.
+The migration helper copies the local backend database, including listings,
+price history, source approvals, collection runs, and audit history, into the
+new Supabase project. It snapshots SQLite while the worker is running, checks
+that the destination does not already contain MarketPulse data, and asks for
+the Supabase URI and database password separately. The password is entered at
+a hidden prompt, encoded for the URI, used for this run only, and never written
+to the repository. Facebook stays approved but disabled until its API token
+is configured.
+
+1. In the MarketPulse Supabase project, choose **Connect**, then **Session
+   pooler**, and copy its PostgreSQL URI, leaving the password placeholder as
+   shown.
+2. From the repository folder, run:
+
+       powershell -ExecutionPolicy Bypass -File .\scripts\migrate-local-db-to-supabase.ps1
+
+3. Paste the URI and press Enter. Enter the database password at the hidden
+   prompt. Confirm that the script prints the final row counts.
+4. After the migration, copy the Session Pooler URI template from Supabase to
+   the clipboard, then run
+   `powershell -ExecutionPolicy Bypass -File .\scripts\copy-supabase-database-url.ps1 -UseClipboard`.
+   The helper reads the URI from the clipboard, asks for the database password
+   with hidden input, saves `DATABASE_URL` as a secret in Vercel production,
+   and copies it for the GitHub secret.
+   In GitHub, open **Settings → Secrets and variables → Actions → New
+   repository secret**, name it `DATABASE_URL`, and paste the copied value.
+   Return to PowerShell and press Enter to clear the clipboard.
+
+The local SQLite database remains unchanged. The migration was verified in the
+Supabase project; the scheduled worker applies any later Alembic migration
+before collecting.
+
+The helper does not print or save the database password. It requires the Vercel
+CLI to be signed in to the `arlotech` team and the GitHub secret to be entered
+once in the repository settings.
 
 If that reset has already happened, the source helper can read the saved admin
 token from the root `.env`, without a clipboard or hidden prompt:
@@ -134,22 +168,35 @@ Imported listings, the watchlist, price alerts, and workspace preferences are st
 When AI analysis is requested, only aggregate statistics and category labels go to OpenAI. The Responses API request disables application-state storage, but OpenAI's API data-retention policies may still apply; review the provider's current data controls before sending sensitive aggregates.
 
 ## Still not connected
-- The connectors are registered and tested, but collection still depends on each source being approved/enabled in the database. Facebook additionally remains operationally blocked until Meta Content Library credentials are supplied in the backend environment.
+- Five approved sources are enabled in Supabase. Scheduled collection still needs the production database URL secret in GitHub Actions and the first workflow run. Facebook remains disabled until its Meta Content Library token is supplied.
 - Imported CSV data remains in browser storage; it is not synchronized to the API or shared between devices.
 - The database-backed Overview is read-only and shows only records already ingested into the backend; it does not merge them into the local workspace dataset.
 - The database can store price observations, but there are no live observations, verified transactions, or independently collected demand signals yet.
 - OpenAI analysis requires a configured backend key/model and an available API connection. A free rule-based local analysis is available without OpenAI.
 - User accounts, per-user roles, cloud sync, and team features are not configured. Admin and worker access currently use separate shared server-side tokens; do not expose them in browser code.
 
-These require approved source access, deployment, server-side credentials, persistent backend storage, and a background worker. The app deliberately avoids presenting mock data as real.
-
-## Suggested next implementation sequence
-1. Record the written authorization reference and verify the exact permitted categories, fields, request interval, and retention with each source/operator.
-2. Add the Facebook Content Library token to the backend environment if Facebook collection is in scope; never put it in frontend variables.
-3. Configure managed PostgreSQL with `DATABASE_URL`, apply Alembic migrations, and back up the database.
-4. Deploy the frontend, API, and persistent worker as separate services; configure CORS and server-only secrets.
-5. Add account authentication, per-user permissions, and rate limits before enabling remote AI or browser-accessible ingestion/admin operations.
-6. Add independently authorized transaction or demand signals before presenting demand, sale-price, or profit analysis.
+## Remaining deployment steps
+1. Save the Supabase `DATABASE_URL` in Vercel and as a GitHub Actions secret using the copy helper described above.
+2. Push the updated `main` branch. Vercel will deploy the frontend and API; GitHub will activate the scheduled collector.
+3. Check `https://marketpulse-nigeria-pi.vercel.app/api/health` for `status: ok` and `database: ok`.
+4. Start **Collect authorized market data** once from GitHub **Actions**, then confirm the newest collection run and listings in the app.
+5. Add the Facebook API token later if you want to enable that source.
 
 ## Vercel deployment
-The frontend can be deployed to Vercel as a Vite project. The FastAPI service and crawler worker should be deployed separately to a Python-capable host. Configure `VITE_API_BASE_URL` with the deployed API URL and, when `MARKETPULSE_READ_TOKEN` is enabled, set the matching `VITE_API_READ_TOKEN`. Never place OpenAI secrets or marketplace credentials in frontend environment variables.
+
+The root `vercel.json` deploys the Vite frontend and FastAPI API as Vercel
+Services. Set the Vercel project's framework preset to **Services** so the
+configuration is used. `/api/*` requests route to FastAPI and all other paths
+route to the frontend on the same domain. In the Vercel project environment,
+set server-side `DATABASE_URL`, `MARKETPULSE_READ_TOKEN`,
+`MARKETPULSE_ADMIN_TOKEN`, and `MARKETPULSE_INGEST_TOKEN`. The matching
+`VITE_API_READ_TOKEN` is browser-visible because the app calls the read API
+from the browser; it is not an admin or database credential. Add optional
+OpenAI or Facebook credentials only when those features are configured.
+
+The background worker runs from `.github/workflows/collect-market-data.yml` on
+GitHub Actions, not as a Vercel request handler. This avoids the Vercel function
+time limit for a full collection pass. Vercel Services are available on Hobby;
+function compute and transfer still follow the plan's usage limits. The
+frontend uses a same-origin `/api` path in production and keeps
+`http://localhost:8000` for local Vite development.

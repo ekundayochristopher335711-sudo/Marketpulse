@@ -1,6 +1,5 @@
 .git
 .env*
-backend
 scripts
 node_modules
 .venv

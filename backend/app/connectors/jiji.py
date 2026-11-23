@@ -1,17 +1,16 @@
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 import os
-import re
 from urllib.parse import urljoin, urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 from typing import AsyncIterator
 
 from .base import COLLECTOR_USER_AGENT, ConnectorConfig, MarketplaceConnector
+from .utils import parse_ngn_price
 from ..schemas import ListingCreate
 
 JIJI_ROOT = "https://jiji.ng"
 MAX_RESPONSE_BYTES = 2_000_000
-MAX_LISTING_PRICE_NGN = 10_000_000_000
 
 CATEGORY_PATHS = {
     "Vehicles": "/vehicles",
@@ -134,12 +133,9 @@ def parse_listing_cards(
             continue
 
         title = card.get("title") or card.get("image_alt", "")
-        price_digits = re.sub(r"\D", "", card.get("asking_price", ""))
+        asking_price = parse_ngn_price(card.get("asking_price", ""))
         location = card.get("location", "")
-        if not title.strip() or not price_digits or not location:
-            continue
-        asking_price = int(price_digits)
-        if asking_price > MAX_LISTING_PRICE_NGN:
+        if not title.strip() or asking_price is None or not location:
             continue
 
         location_parts = [part.strip() for part in location.split(",") if part.strip()]

@@ -3,6 +3,7 @@
 import argparse
 from datetime import datetime, timezone
 import logging
+import os
 from pathlib import Path
 import time
 from urllib.parse import urlsplit
@@ -82,7 +83,7 @@ def sync_once(client: httpx.Client, database_engine=engine, limit: int = 100) ->
                     continue
                 response = client.post("/api/listings", json=listing_payload(listing, source["permitted_fields"]))
                 if response.status_code in {401, 503}:
-                    raise RuntimeError("The hosted ingestion token was not accepted. Match MARKETPULSE_INGEST_TOKEN in the root .env and Render.")
+                    raise RuntimeError("The hosted ingestion token was not accepted. Match MARKETPULSE_INGEST_TOKEN in the root .env and the Vercel API environment.")
                 if response.status_code in {403, 409, 422}:
                     counts["rejected"] += 1
                     logger.warning("Hosted API rejected one %s listing (HTTP %s).", source["source_key"], response.status_code)
@@ -95,7 +96,12 @@ def sync_once(client: httpx.Client, database_engine=engine, limit: int = 100) ->
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--api-base-url", default="https://marketpulse-vdwt.onrender.com")
+    parser.add_argument(
+        "--api-base-url",
+        default=os.getenv(
+            "MARKETPULSE_API_BASE_URL", "https://marketpulse-nigeria-pi.vercel.app"
+        ),
+    )
     parser.add_argument("--once", action="store_true", help="Publish one batch, then exit.")
     parser.add_argument("--limit", type=int, default=100, help="Recent local records per enabled source, per cycle.")
     parser.add_argument("--interval", type=int, default=300, help="Seconds between update cycles.")
@@ -108,7 +114,7 @@ def main() -> int:
     credentials = remote_credentials()
     ingest = credentials.get("MARKETPULSE_INGEST_TOKEN", "")
     if len(ingest) < 32:
-        logger.error("Set MARKETPULSE_INGEST_TOKEN in the project root .env to match Render.")
+        logger.error("Set MARKETPULSE_INGEST_TOKEN in the project root .env to match the Vercel API environment.")
         return 1
     headers = {"X-Ingestion-Token": ingest}
     if credentials.get("MARKETPULSE_READ_TOKEN"):

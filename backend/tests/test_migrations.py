@@ -82,4 +82,4 @@ class MigrationTests(unittest.TestCase):
             self.assertIsNotNone(row[3])
             self.assertIsNotNone(row[4])
             self.assertEqual(sources, (6, 0))
-            self.assertEqual(revision[0], "20261116_0006")
+            self.assertEqual(revision[0], "20261123_0007")
