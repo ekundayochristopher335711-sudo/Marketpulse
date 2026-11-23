@@ -11,3 +11,5 @@ __pycache__
 .ruff_cache
 .collector-logs
 .vercel
+.env.*
+!.env.example
