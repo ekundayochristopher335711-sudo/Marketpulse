@@ -1,11 +1,13 @@
 param(
     [string]$ApiBaseUrl = "https://marketpulse-vdwt.onrender.com",
     [string]$PermissionReference = "owner-confirmed-approval-2026-11-23",
-    [switch]$UseClipboard
+    [switch]$UseClipboard,
+    [switch]$UseEnvFile
 )
 
 $ErrorActionPreference = "Stop"
 $ApiBaseUrl = $ApiBaseUrl.TrimEnd('/')
+if ($UseClipboard -and $UseEnvFile) { throw 'Choose either -UseClipboard or -UseEnvFile.' }
 
 function Read-PlainSecret {
     param([string]$Prompt)
@@ -22,7 +24,12 @@ function Read-PlainSecret {
 
 function Read-AdminToken {
     while ($true) {
-        if ($UseClipboard) {
+        if ($UseEnvFile) {
+            $envPath = Join-Path (Split-Path -Parent $PSScriptRoot) '.env'
+            $entry = Get-Content -LiteralPath $envPath | Where-Object { $_ -match '^\s*MARKETPULSE_ADMIN_TOKEN\s*=' } | Select-Object -First 1
+            if (-not $entry) { throw 'MARKETPULSE_ADMIN_TOKEN is missing from the project root .env.' }
+            $candidate = ($entry -split '=', 2)[1]
+        } elseif ($UseClipboard) {
             Write-Host ""
             Write-Host "PAUSED: Copy the current MARKETPULSE_ADMIN_TOKEN value now."
             Write-Host "Return here and press Enter. The script will then read your clipboard."
@@ -40,6 +47,7 @@ function Read-AdminToken {
         $candidate = $candidate.Trim('"').Trim("'")
 
         if ($candidate -notmatch '^[A-Za-z0-9_+/=-]{32,4096}$') {
+            if ($UseEnvFile) { throw 'The admin token in the root .env must contain at least 32 valid characters.' }
             Write-Host "That input is not a token. Use only the token value (at least 32 characters)."
             Write-Host "No authorization request was sent. Try again, or press Ctrl+C to cancel."
             continue
@@ -72,6 +80,7 @@ while ($true) {
         break
     } catch {
         if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 401) {
+            if ($UseEnvFile) { throw 'The admin token in the root .env does not match the hosted API.' }
             Write-Host "The API did not accept that token. Source settings have not been changed."
             Write-Host "Enter the token again below, or press Ctrl+C to cancel."
             $adminToken = Read-AdminToken

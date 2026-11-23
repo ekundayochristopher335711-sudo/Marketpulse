@@ -68,6 +68,17 @@ Render Free has an ephemeral filesystem: hosted SQLite records and source
 settings can disappear on sleep, restart, or redeploy. Use managed PostgreSQL
 for durable hosted storage before relying on the app long-term.
 
+If that reset has already happened, the source helper can read the saved admin
+token from the root `.env`, without a clipboard or hidden prompt:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\configure-production-sources.ps1 -UseEnvFile
+```
+
+This restores the previously confirmed source configuration only. Run the
+publisher again to send records. This recovery does not replace permanent
+database storage.
+
 ### CSV and PDF exports
 
 The heading offers **Export CSV** and **Export PDF**. Reports also download as
