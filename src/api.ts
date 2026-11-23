@@ -57,6 +57,7 @@ export type MarketOverview = {
 
 export type ApiListing = {
   id: number
+  source_id: string
   title: string
   category: string
   asking_price: number
@@ -65,6 +66,7 @@ export type ApiListing = {
   condition: string | null
   last_observed_at: string
   source_url: string | null
+  description?: string | null
 }
 
 export type PaginatedListings = {
@@ -114,6 +116,21 @@ export function getMarketOverview(days = 30): Promise<MarketOverview> {
 
 export function getRecentListings(limit = 5): Promise<PaginatedListings> {
   return get<PaginatedListings>(`/api/listings?limit=${limit}&listing_status=active`)
+}
+
+export async function getExportListings(): Promise<ApiListing[]> {
+  const rows: ApiListing[] = []
+  const maxRows = 50_000
+  let total = 0
+  do {
+    const page = await get<PaginatedListings>(`/api/listings?limit=500&offset=${rows.length}&listing_status=active`)
+    total = page.total
+    if (total > maxRows) throw new Error('This export exceeds 50,000 records. Export a smaller dataset.')
+    if (!page.items.length) break
+    rows.push(...page.items)
+  } while (rows.length < total)
+  if (rows.length < total) throw new Error('The dataset changed during export. Please try again.')
+  return rows
 }
 
 export function getAnalysisStatus(): Promise<AnalysisStatus> {

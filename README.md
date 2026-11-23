@@ -42,6 +42,47 @@ uvicorn app.main:app --reload --port 8000
 ```
 API docs: http://localhost:8000/docs
 
+### Publish collected data to the hosted app for free
+
+With the hosted API sources configured, put the matching Render values for
+`MARKETPULSE_READ_TOKEN` and `MARKETPULSE_INGEST_TOKEN` in the **project root**
+`.env` (never commit them). Then run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\publish-live-data.ps1
+```
+
+This starts the local collection worker if one is not already running and
+publishes recent real records to Render every five minutes. It sends up to 100
+recent records per enabled source each cycle, preserves observation dates, and
+skips unchanged records. Keep the computer and terminal on for updates. Ctrl+C
+stops publishing and any worker started by this launcher. Existing worker
+processes are left running. To publish one batch only, add `-Once`.
+
+The connector request spacing and approved source/category/field limits still
+apply. Independent sources run concurrently so a slower source does not block
+the rest. Facebook is skipped while disabled. Local database records remain on
+the computer as a separate copy; this is not a complete backup/restore system.
+
+Render Free has an ephemeral filesystem: hosted SQLite records and source
+settings can disappear on sleep, restart, or redeploy. Use managed PostgreSQL
+for durable hosted storage before relying on the app long-term.
+
+### CSV and PDF exports
+
+The heading offers **Export CSV** and **Export PDF**. Reports also download as
+PDF. Live exports fetch all active database records, not just the 50 displayed
+cards. Products-page search/category/location filters and the Watchlist apply
+to both exports. Other pages export the full dataset.
+
+Records are ordered by category and product name. CSV includes numbered rows,
+NGN currency, observation timestamps, and source links, with Excel-compatible
+UTF-8 encoding and protection against spreadsheet formula interpretation.
+PDF includes a dated summary, category medians, wrapped product tables,
+clickable source links, repeating headings, and page numbers. Generation runs
+locally in the browser with no paid API. CSV supports up to 50,000 records;
+PDF supports 5,000. The report records its generation time in Africa/Lagos.
+
 Copy `backend/.env.example` to `backend/.env` (PowerShell: `Copy-Item .env.example .env` while in `backend`). Generate separate long random values for `MARKETPULSE_ADMIN_TOKEN` and `MARKETPULSE_INGEST_TOKEN`; never commit them. Configure `OPENAI_API_KEY` and `OPENAI_MODEL` only if you intend to use AI analysis. The OpenAI API is billed separately. AI analysis is hard-limited to loopback requests; there is no remote-enable setting until user authentication and rate limits exist.
 
 The database schema is managed by Alembic. Run migrations before starting the API and after each backend update. SQLite is the local default; production should use a managed PostgreSQL URL with the `postgresql+psycopg://` driver.

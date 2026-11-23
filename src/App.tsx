@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Activity, ArrowDownRight, ArrowUpRight, Bell, Bookmark, Boxes, ChartNoAxesCombined, ChevronDown, CircleHelp, Database, Download, ExternalLink, Filter, Gauge, LayoutDashboard, Menu, MoreHorizontal, PackageSearch, Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, TrendingUp, Upload, X, Zap } from 'lucide-react'
 import { locations, money, products as demoProducts } from './data'
-import { API_BASE_URL, API_READ_TOKEN, getAnalysisStatus, getApiHealth, getMarketOverview, getMarketplaceSources, getRecentListings } from './api'
+import { API_BASE_URL, API_READ_TOKEN, getAnalysisStatus, getApiHealth, getExportListings, getMarketOverview, getMarketplaceSources, getRecentListings } from './api'
 import type { ApiListing, MarketOverview, MarketplaceSource } from './api'
-import { buildAnalysisPayload, buildLocalAnalysis, buildMarketReport, median, parseListingsCsv, toCsv } from './intelligence'
+import { buildAnalysisPayload, buildLocalAnalysis, median, parseListingsCsv, toCsv } from './intelligence'
 import { isArrayOf, isBoolean, isNumberArray, readStored, writeStored } from './storage'
 import type { MarketAnalysisPayload, Page, Product, WorkspaceSettings } from './types'
 import { Metric } from './components/Metric'
@@ -47,8 +47,9 @@ function imageForLiveCategory(category:string):string {
  return 'ðŸ“¦'
 }
 function apiListingToProduct(listing:ApiListing):Product {
- const observed=new Date(listing.last_observed_at)
- return {id:listing.id,title:listing.title,category:listing.category,price:listing.asking_price,previousPrice:listing.asking_price,location:listing.location,source:listing.source_name,condition:listing.condition||'Not provided',listed:Number.isNaN(observed.valueOf())?'Recently observed':observed.toLocaleString(),views:0,saves:0,trend:0,image:stableCategoryMarker(listing.category),description:'Live listing collected from an approved marketplace source.',verifiedDemo:false,origin:'live'}
+ const stamp=/([zZ]|[+-]\d\d:\d\d)$/.test(listing.last_observed_at)?listing.last_observed_at:`${listing.last_observed_at}Z`
+ const observed=new Date(stamp)
+ return {id:listing.id,title:listing.title,category:listing.category,price:listing.asking_price,previousPrice:listing.asking_price,location:listing.location,source:listing.source_name,condition:listing.condition||'Not provided',listed:Number.isNaN(observed.valueOf())?'Recently observed':observed.toLocaleString(),views:0,saves:0,trend:0,image:stableCategoryMarker(listing.category),description:listing.description||'Live listing collected from an approved marketplace source.',verifiedDemo:false,origin:'live',sourceUrl:listing.source_url||undefined,observedAt:stamp}
 }
 
 function stableCategoryMarker(category:string):string {
@@ -92,6 +93,7 @@ function App(){
  const [selected,setSelected]=useState<Product|null>(null)
  const [notice,setNotice]=useState('')
  const [report,setReport]=useState(false)
+ const [exporting,setExporting]=useState<'csv'|'pdf'|null>(null)
  const [analysis,setAnalysis]=useState<{text:string;model:string}|null>(null)
  const [localAnalysis,setLocalAnalysis]=useState<{text:string;model:string}|null>(null)
  const [analysisLoading,setAnalysisLoading]=useState(false)
@@ -124,8 +126,32 @@ function App(){
  const importFile=async(file:File)=>{try{if(file.size>10_000_000)throw new Error('This CSV is larger than 10 MB. Split it into smaller imports.');const imported=parseListingsCsv(await file.text());if(!window.confirm(`Import ${imported.length} listings and replace the current dataset?`))return;if(!writeStored('marketpulse.listings',imported)||!writeStored('marketpulse.imported',true)||!writeStored('marketpulse.watchlist',[])||!writeStored('marketpulse.priceAlerts',{}))throw new Error('The browser storage limit was reached.');setListings(imported);setImportedDataset(true);setSaved([]);setPriceAlerts({});setReport(false);setAnalysis(null);setLocalAnalysis(null);setAnalysisError('');setAnalysisConsent(false);setQuery('');setCategory('All categories');setLocation('All Nigeria');notify(`Imported ${imported.length} listings. Data stays in this browser.`)}catch(error){const message=error instanceof Error?error.message:'Could not read this CSV file.';notify(`Import failed: ${message}`)}}
  const restoreDemo=()=>{if(!writeStored('marketpulse.listings',demoProducts)||!writeStored('marketpulse.imported',false)||!writeStored('marketpulse.watchlist',[])||!writeStored('marketpulse.priceAlerts',{})){notify('Could not save this change in browser storage.');return}setListings(demoProducts);setImportedDataset(false);setSaved([]);setPriceAlerts({});setReport(false);setAnalysis(null);setLocalAnalysis(null);setAnalysisError('');setAnalysisConsent(false);setQuery('');setCategory('All categories');setLocation('All Nigeria');notify('Demonstration dataset restored.')}
  const download=(filename:string,content:string,type:string)=>{const blob=new Blob([content],{type});const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=filename;link.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000)}
- const exportListings=()=>{download('marketpulse-listings.csv',toCsv(visibleListings),'text/csv;charset=utf-8');notify(`Exported ${visibleListings.length} listings.`)}
- const exportReport=()=>{download('marketpulse-market-snapshot.txt',buildMarketReport(visibleListings,dataMode==='live'?'Live collected data':dataMode==='imported'?'User-imported CSV':'Demonstration data'),'text/plain;charset=utf-8');setReport(true);notify('Market snapshot report downloaded.')}
+ const exportListings=async(format:'csv'|'pdf',asReport=false)=>{
+  if(exporting)return
+  setExporting(format)
+  try{
+   let rows=dataMode==='live'?(await getExportListings()).map(apiListingToProduct):visibleListings
+   let scope=dataMode==='live'?'All collected market records':dataMode==='imported'?'User-imported dataset':'Demonstration dataset'
+   if(page==='Products'){
+    rows=rows.filter(p=>(category==='All categories'||p.category===category)&&(location==='All Nigeria'||p.location.toLowerCase().includes(location.toLowerCase()))&&[p.title,p.category,p.location,p.source,p.condition].some(value=>value.toLowerCase().includes(query.toLowerCase())))
+    scope+=` | Filters: ${category}; ${location}; search ${query||'all products'}`
+   }else if(page==='Watchlist'){
+    rows=rows.filter(p=>saved.includes(p.id))
+    scope+=' | Watchlist'
+   }
+   if(!rows.length)throw new Error('There are no matching records to export yet.')
+   const day=new Date().toISOString().slice(0,10)
+   if(format==='pdf'){
+    if(rows.length>5000)throw new Error('PDF exports support up to 5,000 records. Filter the Products page or use CSV for the full dataset.')
+    const {downloadMarketPdf}=await import('./pdf')
+    downloadMarketPdf(rows,scope,`marketpulse-report-${day}.pdf`)
+   }else download(`marketpulse-listings-${day}.csv`,'\uFEFF'+toCsv(rows),'text/csv;charset=utf-8')
+   if(asReport)setReport(true)
+   notify(`Exported ${rows.length.toLocaleString()} records as ${format.toUpperCase()}, ordered by category and product name.`)
+  }catch(error){notify(error instanceof Error?error.message:'Could not prepare the export. Please try again.')}
+  finally{setExporting(null)}
+ }
+ const exportReport=()=>{void exportListings('pdf',true)}
  const downloadTemplate=()=>download('marketpulse-import-template.csv','title,category,price,location,source,previous_price,condition,listed,views,saves,trend,description\r\n','text/csv;charset=utf-8')
  const analyzeLocally=()=>{setLocalAnalysis(buildLocalAnalysis(visibleListings));setAnalysisError('')}
  const analyzeDataset=async()=>{setAnalysis(null);setAnalysisError('');setAnalysisLoading(true);try{const payload:MarketAnalysisPayload=buildAnalysisPayload(visibleListings);const response=await fetch(`${API_BASE_URL}/api/analysis`,{method:'POST',headers:{'Content-Type':'application/json',...(API_READ_TOKEN?{Authorization:`Bearer ${API_READ_TOKEN}`}:{})},body:JSON.stringify(payload)});const result=await response.json() as {analysis?:unknown;model?:unknown;detail?:unknown};if(!response.ok){const detail=typeof result.detail==='string'?result.detail:Array.isArray(result.detail)?result.detail.map(item=>typeof item==='object'&&item!==null&&'msg'in item?String(item.msg):'').filter(Boolean).join('; '):'';throw new Error(detail||`Analysis request failed (${response.status}).`)}if(typeof result.analysis!=='string'||typeof result.model!=='string')throw new Error('The analysis service returned an unexpected response.');setAnalysis({text:result.analysis,model:result.model})}catch(error){const message=error instanceof TypeError?`Could not reach the MarketPulse API at ${API_BASE_URL}. Start the backend and check CORS settings.`:error instanceof Error?error.message:'AI analysis failed unexpectedly.';setAnalysisError(message)}finally{setAnalysisLoading(false)}}
@@ -155,7 +181,7 @@ function App(){
   <main className="main-area">
    <header className="topbar"><button aria-label="Open navigation" className="icon-btn mobile-menu" onClick={()=>setMobileOpen(true)}><Menu/></button><div className="crumb"><span>Workspace</span><b>/</b><strong>{page}</strong></div><div className="top-actions"><div className="top-search"><Search size={15}/><input aria-label="Search products" placeholder="Search products, categories or locations..." value={query} onChange={e=>{setQuery(e.target.value);if(page!=='Products')setPage('Products')}}/><kbd>Ctrl K</kbd></div><button aria-label="Show notifications" className="icon-btn notification" onClick={()=>notify('Notifications are not configured for this local workspace.')}><Bell size={18}/><i/></button><div className="top-avatar">A</div></div></header>
    <div className="content">
-    <div className="page-heading"><div><div className="eyebrow"><span className="pulse-dot"/> MARKET INTELLIGENCE <span className="demo-tag">{dataMode==='live'?'LIVE DATA':dataMode==='imported'?'IMPORTED DATA':dataMode==='demo'?'DEMO DATA':'NO DATA'}</span></div><h1>{pageTitle}</h1><p>{pageSub[page]}</p></div><div className="heading-actions">{page==='Overview'&&<span className="select compact">{dataMode==='live'&&backendState.overview?backendState.overview.active_listings.toLocaleString():visibleListings.length} listings</span>}<button className="btn btn-secondary" onClick={exportListings} disabled={!visibleListings.length}><Download size={15}/> Export CSV</button><button className="btn btn-primary" onClick={()=>go('Data sources')}><Upload size={15}/> Import data</button></div></div>
+    <div className="page-heading"><div><div className="eyebrow"><span className="pulse-dot"/> MARKET INTELLIGENCE <span className="demo-tag">{dataMode==='live'?'LIVE DATA':dataMode==='imported'?'IMPORTED DATA':dataMode==='demo'?'DEMO DATA':'NO DATA'}</span></div><h1>{pageTitle}</h1><p>{pageSub[page]}</p></div><div className="heading-actions">{page==='Overview'&&<span className="select compact">{dataMode==='live'&&backendState.overview?backendState.overview.active_listings.toLocaleString():visibleListings.length} listings</span>}<button className="btn btn-secondary" onClick={()=>void exportListings('csv')} disabled={!visibleListings.length||exporting!==null}><Download size={15}/>{exporting==='csv'?'Preparing CSV...':'Export CSV'}</button><button className="btn btn-secondary" onClick={()=>void exportListings('pdf')} disabled={!visibleListings.length||exporting!==null}><Download size={15}/>{exporting==='pdf'?'Preparing PDF...':'Export PDF'}</button><button className="btn btn-primary" onClick={()=>go('Data sources')}><Upload size={15}/> Import data</button></div></div>
     <div className="demo-banner"><span><CircleHelp size={16}/></span><div><b>{dataMode==='live'?'Live Jiji data is connected.':dataMode==='imported'?'You’re viewing user-imported data.':dataMode==='demo'?'You’re viewing demonstration data.':'No market dataset is connected yet.'}</b> {dataMode==='live'?(backendState.overview?`${backendState.overview.active_listings.toLocaleString()} active records are available in the backend; the workspace shows the latest collected rows.`:'The backend is loading collected records.') :dataMode==='imported'?'Imported records are not independently verified.':dataMode==='demo'?'Demo records are only for testing the interface.':'Start the backend to load approved Jiji records, or import a CSV file.'}</div><button onClick={()=>go(dataMode==='empty'?'Data sources':'Products')}>{dataMode==='empty'?'Connect data':'View listings'} <ExternalLink size={13}/></button></div>
 
      {page==='Overview'&&<><BackendObservations state={backendState} onRefresh={refreshBackend}/>{dataMode==='empty'?null:<Overview listings={visibleListings} go={go} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}</>}

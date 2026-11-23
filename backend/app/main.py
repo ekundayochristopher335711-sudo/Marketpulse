@@ -153,7 +153,7 @@ def health():
         raise HTTPException(status_code=503, detail="Database is unavailable.") from error
     if not has_migrations:
         raise HTTPException(status_code=503, detail="Database migrations have not been applied.")
-    return {"status": "ok", "service": "marketpulse-api", "database": "ok"}
+    return {"status": "ok", "service": "marketpulse-api", "database": "ok", "revision": os.getenv("RENDER_GIT_COMMIT") or None}
 
 
 @app.get("/api/listings", response_model=PaginatedListings)

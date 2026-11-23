@@ -226,8 +226,9 @@ async def execute_job(job: CollectionJob) -> None:
 
 async def run_due_jobs_once() -> int:
     jobs = claim_due_jobs()
-    for job in jobs:
-        await execute_job(job)
+    # Each connector keeps its own request spacing. Run independent sources
+    # together so an hourly source cannot block the rest of the collector.
+    await asyncio.gather(*(execute_job(job) for job in jobs))
     return len(jobs)
 
 

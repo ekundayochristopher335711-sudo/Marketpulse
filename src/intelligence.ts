@@ -146,6 +146,9 @@ export function parseListingsCsv(csv: string): Product[] {
         image: stableCsvMarker(category),
         description: value(row, 'description')?.trim() || 'Imported listing. Verify the source record and listing status before relying on it.',
         verifiedDemo: false,
+        origin: 'imported',
+        sourceUrl: value(row, 'source_url')?.trim() || undefined,
+        observedAt: value(row, 'observed_at')?.trim() || undefined,
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid listing data.'
@@ -223,16 +226,28 @@ export function buildAnalysisPayload(products: Product[]): MarketAnalysisPayload
 }
 
 export function toCsv(products: Product[]): string {
-  const headers = ['title', 'category', 'price', 'previous_price', 'location', 'source', 'condition', 'listed', 'views', 'saves', 'trend', 'description', 'data_type']
-  const escape = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`
+  const headers = ['record_number', 'category', 'title', 'price', 'currency', 'previous_price', 'location', 'source', 'condition', 'observed_at', 'listed', 'source_url', 'views', 'saves', 'trend', 'description', 'data_type']
+  const escape = (value: string | number) => {
+    const text = String(value)
+    const safe = typeof value === 'string' && /^[\s]*[=+@-]/.test(text) ? `'${text}` : text
+    return `"${safe.replace(/"/g, '""')}"`
+  }
   return [
     headers.join(','),
-    ...products.map(product => [
-      product.title, product.category, product.price, product.previousPrice, product.location,
-      product.source, product.condition, product.listed, product.views, product.saves,
+    ...orderedListings(products).map((product, index) => [
+      index + 1, product.category, product.title, product.price, 'NGN', product.previousPrice, product.location,
+      product.source, product.condition, product.observedAt || '', product.listed, product.sourceUrl || '', product.views, product.saves,
       product.trend, product.description, product.origin === 'live' ? 'live' : product.verifiedDemo ? 'demo' : 'imported',
     ].map(escape).join(',')),
   ].join('\r\n')
+}
+
+export function orderedListings(products: Product[]): Product[] {
+  return [...products].sort((left, right) =>
+    left.category.localeCompare(right.category, 'en', { sensitivity: 'base' }) ||
+    left.title.localeCompare(right.title, 'en', { sensitivity: 'base', numeric: true }) ||
+    left.price - right.price || left.source.localeCompare(right.source) || left.id - right.id,
+  )
 }
 
 export function buildMarketReport(products: Product[], datasetLabel: string): string {

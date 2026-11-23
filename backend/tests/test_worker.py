@@ -31,6 +31,21 @@ class FakeConnector(MarketplaceConnector):
 
 
 class WorkerTests(unittest.TestCase):
+    def test_slow_source_does_not_block_other_sources(self) -> None:
+        async def scenario():
+            other_started = asyncio.Event()
+
+            async def execute(job):
+                if job == 'slow':
+                    await asyncio.wait_for(other_started.wait(), timeout=1)
+                else:
+                    other_started.set()
+
+            with patch.object(worker, 'claim_due_jobs', return_value=['slow', 'fast']), patch.object(worker, 'execute_job', side_effect=execute):
+                return await worker.run_due_jobs_once()
+
+        self.assertEqual(asyncio.run(scenario()), 2)
+
     def setUp(self) -> None:
         self.engine = create_engine(
             "sqlite://",

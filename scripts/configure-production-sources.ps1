@@ -20,24 +20,67 @@ function Read-PlainSecret {
     }
 }
 
+function Read-AdminToken {
+    while ($true) {
+        if ($UseClipboard) {
+            Write-Host ""
+            Write-Host "PAUSED: Copy the current MARKETPULSE_ADMIN_TOKEN value now."
+            Write-Host "Return here and press Enter. The script will then read your clipboard."
+            [void](Read-Host "Press Enter AFTER copying the token")
+            $candidate = [string](Get-Clipboard -Raw)
+        } else {
+            Write-Host "Paste the token, then press Enter. Hidden input will show no characters."
+            $candidate = Read-PlainSecret "MARKETPULSE_ADMIN_TOKEN"
+        }
+
+        $candidate = $candidate.Trim()
+        if ($candidate -match '^MARKETPULSE_ADMIN_TOKEN\s*=\s*(.+)$') {
+            $candidate = $Matches[1].Trim()
+        }
+        $candidate = $candidate.Trim('"').Trim("'")
+
+        if ($candidate -notmatch '^[A-Za-z0-9_+/=-]{32,4096}$') {
+            Write-Host "That input is not a token. Use only the token value (at least 32 characters)."
+            Write-Host "No authorization request was sent. Try again, or press Ctrl+C to cancel."
+            continue
+        }
+
+        return $candidate
+    }
+}
+
+$adminToken = Read-AdminToken
+
 Write-Host "Checking $ApiBaseUrl ..."
-$health = Invoke-RestMethod -Uri "$ApiBaseUrl/api/health" -Method Get -TimeoutSec 30
+$health = Invoke-RestMethod -Uri "$ApiBaseUrl/api/health" -Method Get -TimeoutSec 60
 if ($health.status -ne "ok") {
     throw "The hosted API did not report status ok."
 }
 
-$adminToken = if ($UseClipboard) {
-    $clipboard = (Get-Clipboard -Raw).Trim()
-    if ($clipboard -match '(?m)^\s*MARKETPULSE_ADMIN_TOKEN\s*=\s*(.+?)\s*$') {
-        $clipboard = $Matches[1]
+while ($true) {
+    $headers = @{
+        "X-Admin-Token" = $adminToken
+        "Accept" = "application/json"
     }
-    ($clipboard -replace '\s', '').Trim()
-} else {
-    Read-PlainSecret "Paste MARKETPULSE_ADMIN_TOKEN (input stays hidden)"
+    try {
+        # Check authentication without changing any source settings.
+        $null = Invoke-RestMethod `
+            -Uri "$ApiBaseUrl/api/admin/audit?limit=1" `
+            -Method Get `
+            -Headers $headers `
+            -TimeoutSec 30
+        break
+    } catch {
+        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 401) {
+            Write-Host "The API did not accept that token. Source settings have not been changed."
+            Write-Host "Enter the token again below, or press Ctrl+C to cancel."
+            $adminToken = Read-AdminToken
+            continue
+        }
+        throw
+    }
 }
-if ([string]::IsNullOrWhiteSpace($adminToken)) {
-    throw "An admin token is required. Copy the token first, then rerun with -UseClipboard."
-}
+Write-Host "Admin token accepted. Configuring sources..."
 
 $categories = @(
     "Vehicles",
@@ -89,11 +132,6 @@ $sources = @(
     @{ key = "naijabargains"; access_method = "authorized_web"; enabled = $true; minimum_interval_seconds = 3600 },
     @{ key = "facebook_marketplace"; access_method = "api"; enabled = $false; minimum_interval_seconds = 3600 }
 )
-
-$headers = @{
-    "X-Admin-Token" = $adminToken
-    "Accept" = "application/json"
-}
 
 foreach ($source in $sources) {
     $payload = @{
