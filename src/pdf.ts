@@ -6,6 +6,7 @@ import type { Product } from './types'
 const navy: [number, number, number] = [24, 39, 62]
 const blue: [number, number, number] = [55, 105, 217]
 const muted: [number, number, number] = [99, 113, 134]
+const pdfRowBatchSize = 1_000
 const cash = (value: number) => `NGN ${value.toLocaleString('en-NG')}`
 const clean = (value: string) => value.replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[\u2013\u2014]/g, '-').replace(/\u20a6/g, 'NGN ').replace(/[\r\n\t]+/g, ' ')
 
@@ -81,29 +82,33 @@ export function createMarketPdf(products: Product[], datasetLabel: string): jsPD
   }
 
   doc.addPage()
-  autoTable(doc, {
-    startY: 33,
-    head: [['#', 'Product / category', 'Asking price', 'Location', 'Source / condition', 'Last observed (WAT)']],
-    body: rows.map((row, index) => {
-      const observed = row.observedAt ? new Date(row.observedAt) : null
-      const stamp = observed && !Number.isNaN(observed.valueOf())
-        ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Africa/Lagos' }).format(observed)
-        : row.listed
-      return [index + 1, `${clean(row.title)}\n${clean(row.category)}`, cash(row.price), clean(row.location), `${clean(row.source)}\n${clean(row.condition)}`, clean(stamp)]
-    }),
-    theme: 'striped',
-    margin: { top: 33, bottom: 23, left: 14, right: 14 },
-    styles: { font: 'helvetica', fontSize: 8, cellPadding: 3, textColor: navy, overflow: 'linebreak', valign: 'top' },
-    headStyles: { fillColor: navy, textColor: 255 },
-    alternateRowStyles: { fillColor: [245, 248, 252] },
-    rowPageBreak: 'avoid',
-    columnStyles: { 0: { cellWidth: 11 }, 1: { cellWidth: 85 }, 2: { cellWidth: 35, halign: 'right' }, 3: { cellWidth: 44 }, 4: { cellWidth: 51 }, 5: { cellWidth: 43 } },
-    didDrawCell: data => {
-      if (data.section !== 'body' || data.column.index !== 1) return
-      const url = rows[data.row.index]?.sourceUrl
-      if (url && /^https?:\/\//i.test(url)) doc.link(data.cell.x, data.cell.y, data.cell.width, data.cell.height, { url })
-    },
-  })
+  for (let offset = 0; offset < rows.length; offset += pdfRowBatchSize) {
+    if (offset > 0) doc.addPage()
+    const batch = rows.slice(offset, offset + pdfRowBatchSize)
+    autoTable(doc, {
+      startY: 33,
+      head: [['#', 'Product / category', 'Asking price', 'Location', 'Source / condition', 'Last observed (WAT)']],
+      body: batch.map((row, index) => {
+        const observed = row.observedAt ? new Date(row.observedAt) : null
+        const stamp = observed && !Number.isNaN(observed.valueOf())
+          ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Africa/Lagos' }).format(observed)
+          : row.listed
+        return [offset + index + 1, `${clean(row.title)}\n${clean(row.category)}`, cash(row.price), clean(row.location), `${clean(row.source)}\n${clean(row.condition)}`, clean(stamp)]
+      }),
+      theme: 'striped',
+      margin: { top: 33, bottom: 23, left: 14, right: 14 },
+      styles: { font: 'helvetica', fontSize: 8, cellPadding: 3, textColor: navy, overflow: 'linebreak', valign: 'top' },
+      headStyles: { fillColor: navy, textColor: 255 },
+      alternateRowStyles: { fillColor: [245, 248, 252] },
+      rowPageBreak: 'avoid',
+      columnStyles: { 0: { cellWidth: 11 }, 1: { cellWidth: 85 }, 2: { cellWidth: 35, halign: 'right' }, 3: { cellWidth: 44 }, 4: { cellWidth: 51 }, 5: { cellWidth: 43 } },
+      didDrawCell: data => {
+        if (data.section !== 'body' || data.column.index !== 1) return
+        const url = batch[data.row.index]?.sourceUrl
+        if (url && /^https?:\/\//i.test(url)) doc.link(data.cell.x, data.cell.y, data.cell.width, data.cell.height, { url })
+      },
+    })
+  }
 
   const pages = doc.getNumberOfPages()
   for (let page = 1; page <= pages; page++) {

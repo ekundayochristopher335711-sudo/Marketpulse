@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Activity, ArrowDownRight, ArrowUpRight, Bell, Bookmark, Boxes, ChartNoAxesCombined, ChevronDown, CircleHelp, Database, Download, ExternalLink, Filter, Gauge, LayoutDashboard, Menu, MoreHorizontal, PackageSearch, Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, TrendingUp, Upload, X, Zap } from 'lucide-react'
 import { locations, money, products as demoProducts } from './data'
@@ -84,6 +84,10 @@ function App(){
  })
  const [liveAvailable,setLiveAvailable]=useState(false)
  const [backendState,setBackendState]=useState<BackendState>({loading:true,error:'',overview:null,listings:[]})
+ const [fullLiveProducts,setFullLiveProducts]=useState<Product[]|null>(null)
+ const [fullLiveLoading,setFullLiveLoading]=useState(false)
+ const [fullLiveError,setFullLiveError]=useState('')
+ const fullLiveRequest=useRef(false)
  const [query,setQuery]=useState('')
  const [category,setCategory]=useState('All categories')
  const [location,setLocation]=useState('All Nigeria')
@@ -105,7 +109,8 @@ function App(){
  const liveProducts=useMemo(()=>backendState.listings.map(apiListingToProduct),[backendState.listings])
  const dataMode:DataMode=importedDataset?'imported':liveAvailable?'live':listings.some(product=>product.verifiedDemo)?'demo':'empty'
  const visibleListings=useMemo(()=>dataMode==='imported'||dataMode==='demo'?listings:dataMode==='live'?liveProducts:[],[dataMode,listings,liveProducts])
- const filtered=useMemo(()=>visibleListings.filter(p=>(category==='All categories'||p.category===category)&&(location==='All Nigeria'||p.location.toLowerCase().includes(location.toLowerCase()))&&([p.title,p.category,p.location,p.source,p.condition].some(value=>value.toLowerCase().includes(query.toLowerCase())))).sort((a,b)=>sort==='Price: low to high'?a.price-b.price:sort==='Price: high to low'?b.price-a.price:sort==='Most viewed'?b.views-a.views:sort==='Most relevant'?(b.views+b.saves)-(a.views+a.saves):b.trend-a.trend),[visibleListings,query,category,location,sort])
+ const productListings=dataMode==='live'?(fullLiveProducts??[]):visibleListings
+ const filtered=useMemo(()=>productListings.filter(p=>(category==='All categories'||p.category===category)&&(location==='All Nigeria'||p.location.toLowerCase().includes(location.toLowerCase()))&&([p.title,p.category,p.location,p.source,p.condition].some(value=>value.toLowerCase().includes(query.toLowerCase())))).sort((a,b)=>sort==='Price: low to high'?a.price-b.price:sort==='Price: high to low'?b.price-a.price:sort==='Most viewed'?b.views-a.views:sort==='Most relevant'?(b.views+b.saves)-(a.views+a.saves):b.trend-a.trend),[productListings,query,category,location,sort])
  const trendCount=visibleListings.filter(product=>product.trend>0).length
  const notify=(s:string)=>{setNotice(s);window.setTimeout(()=>setNotice(''),3000)}
  const refreshBackend=useCallback(async()=>{
@@ -118,6 +123,20 @@ function App(){
    setBackendState(current=>({...current,loading:false,error:error instanceof TypeError?`Could not reach ${API_BASE_URL}. Start the backend and check CORS settings.`:error instanceof Error?error.message:'Could not load backend market data.'}))
   }
  },[])
+ const loadAllLiveProducts=useCallback(async()=>{
+  if(fullLiveRequest.current||fullLiveProducts!==null)return
+  fullLiveRequest.current=true
+  setFullLiveLoading(true)
+  setFullLiveError('')
+  try{
+   const rows=await getExportListings()
+   setFullLiveProducts(rows.map(apiListingToProduct))
+  }catch(error){
+   fullLiveRequest.current=false
+   setFullLiveError(error instanceof TypeError?`Could not reach ${API_BASE_URL}. Check the backend connection and try again.`:error instanceof Error?error.message:'Could not load the full product catalogue.')
+  }finally{setFullLiveLoading(false)}
+ },[fullLiveProducts])
+ const retryAllLiveProducts=()=>{fullLiveRequest.current=false;setFullLiveError('');void loadAllLiveProducts()}
  const toggleSave=(id:number)=>setSaved(old=>{const next=old.includes(id)?old.filter(x=>x!==id):[...old,id];if(!writeStored('marketpulse.watchlist',next))notify('Could not save your watchlist in browser storage.');return next})
  const setPriceAlert=(id:number,threshold:number|null)=>{setPriceAlerts(old=>{const next={...old};if(threshold===null)delete next[String(id)];else next[String(id)]=threshold;if(!writeStored('marketpulse.priceAlerts',next))notify('Could not save your price alert in browser storage.');return next})}
  const go=(p:Page)=>{setPage(p);setMobileOpen(false);setSelected(null)}
@@ -142,7 +161,7 @@ function App(){
    if(!rows.length)throw new Error('There are no matching records to export yet.')
    const day=new Date().toISOString().slice(0,10)
    if(format==='pdf'){
-    if(rows.length>5000)throw new Error('PDF exports support up to 5,000 records. Filter the Products page or use CSV for the full dataset.')
+    if(rows.length>20_000)throw new Error('PDF exports support up to 20,000 records to keep browser memory use manageable. Use CSV for larger datasets.')
     const {downloadMarketPdf}=await import('./pdf')
     downloadMarketPdf(rows,scope,`marketpulse-report-${day}.pdf`)
    }else download(`marketpulse-listings-${day}.csv`,'\uFEFF'+toCsv(rows),'text/csv;charset=utf-8')
@@ -158,6 +177,9 @@ function App(){
  const updateSettings=(next:WorkspaceSettings)=>{setSettings(next);if(!writeStored('marketpulse.settings',next))notify('Could not save workspace preferences in browser storage.')}
  useEffect(()=>{void getAnalysisStatus().then(status=>setAnalysisStatus({configured:status.configured,model:status.model})).catch(()=>setAnalysisStatus({configured:false,model:null}))},[])
  useEffect(()=>{void refreshBackend()},[refreshBackend])
+ useEffect(()=>{
+  if(page==='Products'&&dataMode==='live'&&fullLiveProducts===null&&!fullLiveError)void loadAllLiveProducts()
+ },[page,dataMode,fullLiveProducts,fullLiveError,loadAllLiveProducts])
  useEffect(()=>{
   const handleShortcut=(event:KeyboardEvent)=>{
    if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='k'){
@@ -184,13 +206,13 @@ function App(){
     <div className="page-heading"><div><div className="eyebrow"><span className="pulse-dot"/> MARKET INTELLIGENCE <span className="demo-tag">{dataMode==='live'?'LIVE DATA':dataMode==='imported'?'IMPORTED DATA':dataMode==='demo'?'DEMO DATA':'NO DATA'}</span></div><h1>{pageTitle}</h1><p>{pageSub[page]}</p></div><div className="heading-actions">{page==='Overview'&&<span className="select compact">{dataMode==='live'&&backendState.overview?backendState.overview.active_listings.toLocaleString():visibleListings.length} listings</span>}<button className="btn btn-secondary" onClick={()=>void exportListings('csv')} disabled={!visibleListings.length||exporting!==null}><Download size={15}/>{exporting==='csv'?'Preparing CSV...':'Export CSV'}</button><button className="btn btn-secondary" onClick={()=>void exportListings('pdf')} disabled={!visibleListings.length||exporting!==null}><Download size={15}/>{exporting==='pdf'?'Preparing PDF...':'Export PDF'}</button><button className="btn btn-primary" onClick={()=>go('Data sources')}><Upload size={15}/> Import data</button></div></div>
     <div className="demo-banner"><span><CircleHelp size={16}/></span><div><b>{dataMode==='live'?'Live Jiji data is connected.':dataMode==='imported'?'You’re viewing user-imported data.':dataMode==='demo'?'You’re viewing demonstration data.':'No market dataset is connected yet.'}</b> {dataMode==='live'?(backendState.overview?`${backendState.overview.active_listings.toLocaleString()} active records are available in the backend; the workspace shows the latest collected rows.`:'The backend is loading collected records.') :dataMode==='imported'?'Imported records are not independently verified.':dataMode==='demo'?'Demo records are only for testing the interface.':'Start the backend to load approved Jiji records, or import a CSV file.'}</div><button onClick={()=>go(dataMode==='empty'?'Data sources':'Products')}>{dataMode==='empty'?'Connect data':'View listings'} <ExternalLink size={13}/></button></div>
 
-     {page==='Overview'&&<><BackendObservations state={backendState} onRefresh={refreshBackend}/>{dataMode==='empty'?null:<Overview listings={visibleListings} go={go} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}</>}
-     {page==='Products'&&<ProductsView listings={visibleListings} filtered={filtered} query={query} setQuery={setQuery} category={category} setCategory={setCategory} location={location} setLocation={setLocation} sort={sort} setSort={setSort} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}
+     {page==='Overview'&&<><BackendObservations state={backendState} onRefresh={refreshBackend} setSelected={setSelected}/>{dataMode==='empty'?null:<Overview listings={visibleListings} go={go} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}</>}
+     {page==='Products'&&<ProductsView listings={productListings} filtered={filtered} loading={dataMode==='live'&&fullLiveLoading} error={dataMode==='live'?fullLiveError:''} onRetry={retryAllLiveProducts} query={query} setQuery={setQuery} category={category} setCategory={setCategory} location={location} setLocation={setLocation} sort={sort} setSort={setSort} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}
      {page==='Trending'&&<TrendingView listings={visibleListings} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}
      {page==='Price intelligence'&&<PriceView listings={visibleListings} setSelected={setSelected} saved={saved} toggleSave={toggleSave}/>}
     {page==='Opportunities'&&<OpportunityView listings={visibleListings} setSelected={setSelected}/>}
      {page==='Watchlist'&&<WatchlistView listings={visibleListings} saved={saved} priceAlerts={priceAlerts} toggleSave={toggleSave} setSelected={setSelected}/>}
-    {page==='Data sources'&&<SourcesView importFile={importFile} importedDataset={importedDataset} dataMode={dataMode} restoreDemo={restoreDemo} listingsCount={visibleListings.length} downloadTemplate={downloadTemplate}/>}
+    {page==='Data sources'&&<SourcesView importFile={importFile} importedDataset={importedDataset} dataMode={dataMode} restoreDemo={restoreDemo} listingsCount={dataMode==='live'&&backendState.overview?backendState.overview.active_listings:visibleListings.length} downloadTemplate={downloadTemplate}/>}
      {page==='Reports'&&<ReportsView report={report} onGenerate={exportReport} importedDataset={importedDataset||dataMode==='live'} analysis={analysis} localAnalysis={localAnalysis} analysisLoading={analysisLoading} analysisError={analysisError} analysisConsent={analysisConsent} setAnalysisConsent={setAnalysisConsent} onAnalyze={analyzeDataset} onAnalyzeLocally={analyzeLocally} openAiConfigured={analysisStatus.configured} openAiModel={analysisStatus.model}/>}
      {page==='Settings'&&<SettingsView settings={settings} onChange={updateSettings} notify={notify}/>}
     <footer><span>© 2026 MarketPulse</span><span><i className="green-dot"/> {dataMode==='live'?'Live Jiji data':dataMode==='imported'?'Imported dataset':dataMode==='demo'?'Demo fallback':'No data connected'}</span><span>Built for Nigeria's resale economy</span></footer>
@@ -201,7 +223,7 @@ function App(){
  </div>
 }
 
-function BackendObservations({state,onRefresh}:{state:BackendState;onRefresh:()=>void}){
+function BackendObservations({state,onRefresh,setSelected}:{state:BackendState;onRefresh:()=>void;setSelected:(product:Product)=>void}){
  const refresh=onRefresh
  if(state.loading&&!state.overview)return <section className="panel backend-observations"><div className="panel-head"><div><span className="eyebrow">DATABASE OBSERVATIONS</span><h3>Loading collected market data…</h3></div></div></section>
  if(!state.overview)return <section className="panel backend-observations"><div className="panel-head"><div><span className="eyebrow">DATABASE OBSERVATIONS</span><h3>Backend market data unavailable</h3></div><button className="btn btn-secondary" onClick={()=>void refresh()} disabled={state.loading}>{state.loading?'Refreshing…':'Retry'}</button></div><div className="analysis-error" role="alert">{state.error}</div></section>
@@ -220,7 +242,7 @@ function BackendObservations({state,onRefresh}:{state:BackendState;onRefresh:()=
   {overview.active_listings===0?<div className="panel empty-state"><Database size={25}/><b>No active listing records are currently available.</b><span>Check source approvals, collection runs, and listing filters. Backend data remains separate from the local demo or imported workspace dataset.</span></div>:<>
    <section className="overview-grid">
     <div className="panel chart-panel"><div className="panel-head"><div><h3>Median asking price by category</h3><p>Computed from active database records</p></div></div>{categories.length?<div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><BarChart data={categories} layout="vertical" margin={{top:8,right:18,left:4,bottom:0}}><CartesianGrid strokeDasharray="3 5" horizontal={false} stroke="#edf0f5"/><XAxis type="number" tickFormatter={fmtCompact} axisLine={false} tickLine={false} tick={{fill:'#8b95a7',fontSize:10}}/><YAxis type="category" dataKey="category" axisLine={false} tickLine={false} width={110} tick={{fill:'#68758a',fontSize:10}}/><Tooltip formatter={value=>money(Number(value))}/><Bar dataKey="median_asking_price_ngn" fill="#5c83ec" radius={[0,5,5,0]} barSize={15}/></BarChart></ResponsiveContainer></div>:<div className="empty-state">No category statistics available.</div>}</div>
-    <div className="panel category-panel"><div className="panel-head"><div><h3>Recent active listings</h3><p>Latest records observed by the backend</p></div></div>{state.listings.length?<div className="recent-listings">{state.listings.map(listing=><div className="recent-listing" key={listing.id}><div><b>{listing.title}</b><small>{listing.category} · {listing.location} · {listing.source_name}</small></div><strong>{money(listing.asking_price)}</strong>{listing.source_url&&<a href={listing.source_url} target="_blank" rel="noreferrer" aria-label={`Open source listing for ${listing.title}`}><ExternalLink size={14}/></a>}</div>)}</div>:<div className="empty-state"><span>No active listing rows found.</span></div>}</div>
+    <div className="panel category-panel"><div className="panel-head"><div><h3>Recent active listings</h3><p>Latest records observed by the backend</p></div></div>{state.listings.length?<div className="recent-listings">{state.listings.map(listing=><div className="recent-listing" key={listing.id}><div><button className="recent-listing-title" onClick={()=>setSelected(apiListingToProduct(listing))}>{listing.title}</button><small>{listing.category} · {listing.location} · {listing.source_name}</small></div><strong>{money(listing.asking_price)}</strong>{listing.source_url&&<a href={listing.source_url} target="_blank" rel="noreferrer" aria-label={`Open source listing for ${listing.title}`}><ExternalLink size={14}/></a>}</div>)}</div>:<div className="empty-state"><span>No active listing rows found.</span></div>}</div>
    </section>
    <section className="panel table-panel"><div className="panel-head"><div><h3>Listing activity by category</h3><p>Newly observed records in adjacent seven-day windows</p></div><span className="status-pill status-demo">Supply signal only</span></div>{overview.listing_momentum.length?<div className="momentum-list">{overview.listing_momentum.slice(0,8).map(item=><div className="source-detail" key={item.category}><span><b>{item.category}</b><small>{item.current_7_day_listings} recent · {item.previous_7_day_listings} previous</small></span><strong>{item.change_percent===null?'No prior baseline':`${item.change_percent>0?'+':''}${item.change_percent}%`}</strong></div>)}</div>:<div className="empty-state">Not enough history for a listing-activity comparison.</div>}</section>
   </>}
@@ -252,10 +274,27 @@ function Overview({listings,go,setSelected,saved,toggleSave}:{listings:Product[]
   <section className="bottom-grid"><div className="panel insight-panel"><div className="insight-icon"><Sparkles size={18}/></div><div><span className="eyebrow">DATASET SNAPSHOT</span><h3>{categoryCounts[0]?`${categoryCounts[0].name} leads listing coverage`:'No listings loaded'}</h3><p>{categoryCounts[0]?`${categoryCounts[0].value} of ${listings.length} records are in the most represented category. Listing volume is not a measure of buyer demand.`:'Import an authorized CSV export to start analyzing observed listings.'}</p><button className="text-btn" onClick={()=>go('Opportunities')}>Review price changes <ArrowUpRight size={14}/></button></div></div><div className="panel mini-source"><div className="panel-head"><div><h3>Source coverage</h3><p>Sources named in this dataset</p></div><button className="text-btn" onClick={()=>go('Data sources')}>Manage</button></div>{sourceNames.length?sourceNames.map((source,index)=><div className="source-row" key={source}><span className={`source-logo ${index?'orange':''}`}>{source.slice(0,1).toUpperCase()}</span><div><b>{source}</b><small>{listings.filter(product=>product.source===source).length} listing records</small></div><span className="status-pill status-demo">{listings.some(product=>product.source===source&&product.verifiedDemo)?'Demo':'Imported'}</span></div>):<div className="empty-state"><Database size={22}/><span>No source fields in this dataset.</span></div>}</div></section>
  </>
 }
-function ProductsView({listings,filtered,query,setQuery,category,setCategory,location,setLocation,sort,setSort,setSelected,saved,toggleSave}:{listings:Product[];filtered:Product[];query:string;setQuery:(s:string)=>void;category:string;setCategory:(s:string)=>void;location:string;setLocation:(s:string)=>void;sort:string;setSort:(s:string)=>void;setSelected:(p:Product)=>void;saved:number[];toggleSave:(id:number)=>void}){
+function ProductsView({listings,filtered,loading,error,onRetry,query,setQuery,category,setCategory,location,setLocation,sort,setSort,setSelected,saved,toggleSave}:{listings:Product[];filtered:Product[];loading:boolean;error:string;onRetry:()=>void;query:string;setQuery:(s:string)=>void;category:string;setCategory:(s:string)=>void;location:string;setLocation:(s:string)=>void;sort:string;setSort:(s:string)=>void;setSelected:(p:Product)=>void;saved:number[];toggleSave:(id:number)=>void}){
+ const pageSize=50
+ const [currentPage,setCurrentPage]=useState(1)
+ useEffect(()=>{setCurrentPage(1)},[query,category,location,sort,listings.length])
  const categoryOptions=['All categories',...Array.from(new Set(listings.map(product=>product.category))).sort()]
  const locationOptions=['All Nigeria',...new Set([...locations.slice(1,-1),...listings.map(product=>product.location)])]
-  return <div className="panel explorer-panel"><div className="explorer-toolbar"><div className="search-field"><Search size={16}/><input aria-label="Search products in dataset" placeholder="Search products, brands or keywords..." value={query} onChange={e=>setQuery(e.target.value)}/>{query&&<button aria-label="Clear product search" onClick={()=>setQuery('')}><X size={14}/></button>}</div><div className="filter-label"><SlidersHorizontal size={15}/> Filters</div><select aria-label="Filter by category" className="select" value={category} onChange={e=>setCategory(e.target.value)}>{categoryOptions.map(c=><option key={c}>{c}</option>)}</select><select aria-label="Filter by location" className="select" value={location} onChange={e=>setLocation(e.target.value)}>{locationOptions.map(l=><option key={l}>{l}</option>)}</select><select aria-label="Sort listings" className="select" value={sort} onChange={e=>setSort(e.target.value)}><option>Most relevant</option><option>Most viewed</option><option>Price: low to high</option><option>Price: high to low</option></select></div><div className="results-line"><span><b>{filtered.length}</b> listings found</span><span><Filter size={13}/> {filtered.some(p=>p.verifiedDemo)?'Includes demo records':'Current dataset'}</span></div><div className="product-grid">{filtered.map(p=><ProductCard key={p.id} product={p} setSelected={setSelected} saved={saved.includes(p.id)} toggleSave={toggleSave}/>)}</div>{filtered.length===0&&<div className="empty-state"><PackageSearch size={28}/><b>No matching products</b><span>Try changing your search or filters.</span></div>}</div>
+ const pageCount=Math.max(1,Math.ceil(filtered.length/pageSize))
+ const safePage=Math.min(currentPage,pageCount)
+ const pageListings=filtered.slice((safePage-1)*pageSize,safePage*pageSize)
+ const firstResult=filtered.length?(safePage-1)*pageSize+1:0
+ const lastResult=Math.min(safePage*pageSize,filtered.length)
+ return <div className="panel explorer-panel">
+  <div className="explorer-toolbar"><div className="search-field"><Search size={16}/><input aria-label="Search products in dataset" placeholder="Search products, brands or keywords..." value={query} onChange={e=>setQuery(e.target.value)}/>{query&&<button aria-label="Clear product search" onClick={()=>setQuery('')}><X size={14}/></button>}</div><div className="filter-label"><SlidersHorizontal size={15}/> Filters</div><select aria-label="Filter by category" className="select" value={category} onChange={e=>setCategory(e.target.value)}>{categoryOptions.map(c=><option key={c}>{c}</option>)}</select><select aria-label="Filter by location" className="select" value={location} onChange={e=>setLocation(e.target.value)}>{locationOptions.map(l=><option key={l}>{l}</option>)}</select><select aria-label="Sort listings" className="select" value={sort} onChange={e=>setSort(e.target.value)}><option>Most relevant</option><option>Most viewed</option><option>Price: low to high</option><option>Price: high to low</option></select></div>
+  {error&&<div className="products-load-error" role="alert"><span>{error}</span><button className="btn btn-secondary" onClick={onRetry}>Retry</button></div>}
+  <div className="results-line"><span><b>{loading?'Loading':filtered.length.toLocaleString()}</b> {loading?'all collected listings':`listings found${filtered.length>pageSize?` · showing ${firstResult.toLocaleString()}–${lastResult.toLocaleString()}`:''}`}</span><span><Filter size={13}/> {filtered.some(p=>p.verifiedDemo)?'Includes demo records':'Current dataset'}</span></div>
+  {loading?<div className="empty-state products-loading"><span className="analysis-spinner"/><b>Loading the full product catalogue</b><span>This can take a moment for several thousand listings.</span></div>:<>
+   <div className="product-grid">{pageListings.map(p=><ProductCard key={p.id} product={p} setSelected={setSelected} saved={saved.includes(p.id)} toggleSave={toggleSave}/>)}</div>
+   {filtered.length===0&&!error&&<div className="empty-state"><PackageSearch size={28}/><b>No matching products</b><span>Try changing your search or filters.</span></div>}
+   {filtered.length>pageSize&&<div className="product-pagination"><span>Page {safePage.toLocaleString()} of {pageCount.toLocaleString()}</span><div><button className="btn btn-secondary" disabled={safePage<=1} onClick={()=>setCurrentPage(page=>Math.max(1,page-1))}>Previous</button><button className="btn btn-secondary" disabled={safePage>=pageCount} onClick={()=>setCurrentPage(page=>Math.min(pageCount,page+1))}>Next</button></div></div>}
+  </>}
+ </div>
 }
 function TrendingView({listings,setSelected,saved,toggleSave}:{listings:Product[];setSelected:(p:Product)=>void;saved:number[];toggleSave:(id:number)=>void}){
  const sorted=[...listings].filter(product=>product.trend>0).sort((a,b)=>b.trend-a.trend)

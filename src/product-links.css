@@ -1,0 +1,136 @@
+.source-product-link {
+  text-decoration: none;
+}
+
+.recent-listing-title {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #35435a;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-listing-title:hover {
+  color: #3769d9;
+  text-decoration: underline;
+}
+
+.product-card .source-product-link {
+  border: 1px solid #e5eaf1;
+  background: #fff;
+  color: #416bd0;
+}
+
+.product-card .source-product-link:hover {
+  background: #f6f8fc;
+}
+
+.source-link-note {
+  padding: 9px;
+  border-radius: 6px;
+  background: #f6f8fb;
+  color: #8792a4;
+  font-size: 9px;
+}
+
+.product-row-links {
+  white-space: nowrap;
+}
+
+.table-source-link {
+  display: inline-grid;
+  min-width: 25px;
+  min-height: 25px;
+  place-items: center;
+  margin-right: 3px;
+  border-radius: 5px;
+  color: #6b83bd;
+  vertical-align: middle;
+}
+
+.table-source-link:hover {
+  background: #f0f4fb;
+  color: #3769d9;
+}
+
+.products-load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 11px 12px;
+  border: 1px solid #f2d4d1;
+  border-radius: 7px;
+  background: #fff7f6;
+  color: #a33f38;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.products-load-error .btn {
+  flex: 0 0 auto;
+}
+
+.products-loading {
+  min-height: 190px;
+}
+
+.products-loading .analysis-spinner {
+  width: 22px;
+  height: 22px;
+  border-color: #d7e1f7;
+  border-top-color: #3769d9;
+}
+
+.product-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 13px;
+  border-top: 1px solid #edf0f4;
+  color: #7f8ca1;
+  font-size: 10px;
+}
+
+.product-pagination > div {
+  display: flex;
+  gap: 8px;
+}
+
+.product-pagination .btn:disabled {
+  cursor: default;
+  opacity: .5;
+}
+
+@media (max-width: 500px) {
+  .products-load-error {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .product-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 700px) {
+  .recent-listing {
+    grid-template-columns: minmax(0, 1fr) auto 28px;
+  }
+
+  .recent-listing a {
+    display: grid;
+    min-height: 28px;
+  }
+}
