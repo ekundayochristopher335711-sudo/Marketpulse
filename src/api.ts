@@ -81,6 +81,7 @@ export type AnalysisStatus = {
   configured: boolean
   model: string | null
   local_only: boolean
+  daily_limit: number
 }
 
 async function get<T>(path: string): Promise<T> {

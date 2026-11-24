@@ -266,3 +266,4 @@ class MarketAnalysisStatus(BaseModel):
     configured: bool
     model: Optional[str] = None
     local_only: bool
+    daily_limit: int

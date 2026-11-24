@@ -128,7 +128,7 @@ clickable source links, repeating headings, and page numbers. Generation runs
 locally in the browser with no paid API. CSV supports up to 50,000 records;
 PDF supports 5,000. The report records its generation time in Africa/Lagos.
 
-Copy `backend/.env.example` to `backend/.env` (PowerShell: `Copy-Item .env.example .env` while in `backend`). Generate separate long random values for `MARKETPULSE_ADMIN_TOKEN` and `MARKETPULSE_INGEST_TOKEN`; never commit them. Configure `OPENAI_API_KEY` and `OPENAI_MODEL` only if you intend to use AI analysis. The OpenAI API is billed separately. AI analysis is hard-limited to loopback requests; there is no remote-enable setting until user authentication and rate limits exist.
+Copy `backend/.env.example` to `backend/.env` (PowerShell: `Copy-Item .env.example .env` while in `backend`). Generate separate long random values for `MARKETPULSE_ADMIN_TOKEN` and `MARKETPULSE_INGEST_TOKEN`; never commit them. OpenAI analysis is optional and billed separately. To enable the remote Reports feature, configure `OPENAI_API_KEY`, `OPENAI_MODEL`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and a comma-separated `MARKETPULSE_AI_ALLOWED_EMAILS` allowlist on the API server. The Vercel frontend needs the public `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` values for sign-in. The API verifies each Supabase Auth session, allows only listed email addresses, and enforces a persistent per-user daily limit plus a per-minute limit before contacting OpenAI. The default daily cap is 10 analyses and resets at midnight in Nigeria.
 
 The database schema is managed by Alembic. Run migrations before starting the API and after each backend update. SQLite is the local default; production should use a managed PostgreSQL URL with the `postgresql+psycopg://` driver.
 
@@ -173,7 +173,7 @@ When AI analysis is requested, only aggregate statistics and category labels go 
 - The database-backed Overview is read-only and shows only records already ingested into the backend; it does not merge them into the local workspace dataset.
 - The database can store price observations, but there are no live observations, verified transactions, or independently collected demand signals yet.
 - OpenAI analysis requires a configured backend key/model and an available API connection. A free rule-based local analysis is available without OpenAI.
-- User accounts, per-user roles, cloud sync, and team features are not configured. Admin and worker access currently use separate shared server-side tokens; do not expose them in browser code.
+- General user accounts, per-user roles, cloud sync, and team features are not configured. Supabase Auth gates only the optional OpenAI Reports action for explicitly allowlisted email addresses. Admin and worker access still use separate shared server-side tokens; do not expose them in browser code.
 
 ## Remaining deployment steps
 1. Save the Supabase `DATABASE_URL` in Vercel and as a GitHub Actions secret using the copy helper described above.
@@ -189,10 +189,19 @@ Services. Set the Vercel project's framework preset to **Services** so the
 configuration is used. `/api/*` requests route to FastAPI and all other paths
 route to the frontend on the same domain. In the Vercel project environment,
 set server-side `DATABASE_URL`, `MARKETPULSE_READ_TOKEN`,
-`MARKETPULSE_ADMIN_TOKEN`, and `MARKETPULSE_INGEST_TOKEN`. The matching
+`MARKETPULSE_ADMIN_TOKEN`, and `MARKETPULSE_INGEST_TOKEN`. To enable private
+OpenAI analysis, also set server-side `OPENAI_API_KEY`, `OPENAI_MODEL`,
+`SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and
+`MARKETPULSE_AI_ALLOWED_EMAILS` to the email of the Supabase Auth user you
+created. The frontend needs `VITE_SUPABASE_URL` and
+`VITE_SUPABASE_PUBLISHABLE_KEY`; the publishable key is safe to expose, while
+the OpenAI key must remain server-side. `MARKETPULSE_AI_DAILY_LIMIT` defaults
+to 10 analyses per account per Nigeria calendar day, and
+`MARKETPULSE_AI_REQUESTS_PER_MINUTE` defaults to 3. Create your account under
+Supabase Authentication → Users before signing in on Reports. The matching
 `VITE_API_READ_TOKEN` is browser-visible because the app calls the read API
 from the browser; it is not an admin or database credential. Add optional
-OpenAI or Facebook credentials only when those features are configured.
+Facebook credentials only when that feature is configured.
 
 The background worker runs from `.github/workflows/collect-market-data.yml` on
 GitHub Actions, not as a Vercel request handler. This avoids the Vercel function

@@ -7,11 +7,13 @@ import os
 from threading import Lock
 from time import monotonic
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+import httpx
 from openai import OpenAI, OpenAIError
 from sqlalchemy import func, inspect, text
 from sqlmodel import Session, select
@@ -45,12 +47,25 @@ logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip()
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_PUBLISHABLE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
+AI_ALLOWED_EMAILS = {
+    email.strip().lower()
+    for email in os.getenv("MARKETPULSE_AI_ALLOWED_EMAILS", "").split(",")
+    if email.strip()
+}
+AI_DAILY_LIMIT = min(50, max(1, int(os.getenv("MARKETPULSE_AI_DAILY_LIMIT", "10"))))
+AI_REQUESTS_PER_MINUTE = min(
+    10, max(1, int(os.getenv("MARKETPULSE_AI_REQUESTS_PER_MINUTE", "3")))
+)
 INGESTION_TOKEN = os.getenv("MARKETPULSE_INGEST_TOKEN", "").strip()
 ADMIN_TOKEN = os.getenv("MARKETPULSE_ADMIN_TOKEN", "").strip()
 READ_TOKEN = os.getenv("MARKETPULSE_READ_TOKEN", "").strip()
 RATE_LIMIT_PER_MINUTE = max(10, int(os.getenv("MARKETPULSE_RATE_LIMIT_PER_MINUTE", "120")))
 _read_rate_events: dict[str, deque[float]] = defaultdict(deque)
 _read_rate_lock = Lock()
+_ai_rate_events: dict[str, deque[float]] = defaultdict(deque)
+_ai_rate_lock = Lock()
 
 app = FastAPI(
     title="MarketPulse API",
@@ -140,6 +155,115 @@ def require_read_access(
                 headers={"Retry-After": "60"},
             )
         events.append(now)
+
+
+def require_ai_user(
+    authorization: Optional[str] = Header(default=None),
+) -> dict[str, str]:
+    if not OPENAI_API_KEY or not OPENAI_MODEL:
+        raise HTTPException(status_code=503, detail="OpenAI analysis is not configured.")
+    if not SUPABASE_URL or not SUPABASE_PUBLISHABLE_KEY or not AI_ALLOWED_EMAILS:
+        raise HTTPException(
+            status_code=503,
+            detail="Secure AI access is not configured on the MarketPulse API.",
+        )
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Sign in to use OpenAI analysis.")
+
+    access_token = authorization[7:].strip()
+    if not access_token or len(access_token) > 8192:
+        raise HTTPException(status_code=401, detail="Invalid sign-in session.")
+    try:
+        response = httpx.get(
+            f"{SUPABASE_URL}/auth/v1/user",
+            headers={
+                "apikey": SUPABASE_PUBLISHABLE_KEY,
+                "Authorization": f"Bearer {access_token}",
+            },
+            timeout=5.0,
+        )
+    except httpx.HTTPError as error:
+        logger.warning("Supabase Auth verification request failed: %s", error)
+        raise HTTPException(
+            status_code=503, detail="Could not verify your Supabase sign-in. Try again."
+        ) from error
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=401, detail="Your sign-in expired. Sign in again.")
+    try:
+        user = response.json()
+    except ValueError as error:
+        raise HTTPException(status_code=401, detail="Invalid Supabase sign-in response.") from error
+
+    user_id = user.get("id") if isinstance(user, dict) else None
+    email = user.get("email", "") if isinstance(user, dict) else ""
+    email_confirmed_at = (
+        user.get("email_confirmed_at") or user.get("confirmed_at")
+        if isinstance(user, dict)
+        else None
+    )
+    if not isinstance(user_id, str) or not isinstance(email, str) or not email or not email_confirmed_at:
+        raise HTTPException(status_code=401, detail="Your Supabase account has no verified email.")
+    if email.strip().lower() not in AI_ALLOWED_EMAILS:
+        raise HTTPException(status_code=403, detail="This account is not allowed to use AI analysis.")
+    return {"id": user_id}
+
+
+def reserve_ai_usage(user_id: str) -> None:
+    actor = f"supabase:{user_id}"[:80]
+    now = datetime.now(timezone.utc)
+    lagos_now = now.astimezone(ZoneInfo("Africa/Lagos"))
+    local_midnight = lagos_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start = local_midnight.astimezone(timezone.utc)
+    minute_ago = monotonic() - 60
+
+    with _ai_rate_lock:
+        events = _ai_rate_events[actor]
+        while events and events[0] <= minute_ago:
+            events.popleft()
+        if len(events) >= AI_REQUESTS_PER_MINUTE:
+            raise HTTPException(
+                status_code=429,
+                detail="You have reached the short-term AI request limit. Try again in a minute.",
+                headers={"Retry-After": "60"},
+            )
+
+        try:
+            with Session(engine) as session:
+                if engine.dialect.name == "postgresql":
+                    session.execute(
+                        text("SELECT pg_advisory_xact_lock(hashtext(:actor))"),
+                        {"actor": actor},
+                    )
+                used_today = session.exec(
+                    select(func.count(AuditLog.id)).where(
+                        AuditLog.actor == actor,
+                        AuditLog.action == "ai_analysis",
+                        AuditLog.created_at >= day_start,
+                    )
+                ).one()
+                if used_today >= AI_DAILY_LIMIT:
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"Daily AI limit reached ({AI_DAILY_LIMIT} analyses). It resets at midnight Nigeria time.",
+                    )
+                session.add(
+                    AuditLog(
+                        actor=actor,
+                        action="ai_analysis",
+                        details_json=json.dumps({"model": OPENAI_MODEL}),
+                        created_at=now,
+                    )
+                )
+                session.commit()
+        except HTTPException:
+            raise
+        except Exception as error:
+            logger.exception("Could not reserve AI usage for the signed-in user.")
+            raise HTTPException(
+                status_code=503, detail="Could not check the AI usage limit. Try again later."
+            ) from error
+        events.append(monotonic())
 
 
 @app.get("/api/health")
@@ -414,32 +538,21 @@ def collection_runs(
 
 @app.get("/api/analysis/status", response_model=MarketAnalysisStatus)
 def analysis_status(_: None = Depends(require_read_access)):
+    auth_ready = bool(SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY and AI_ALLOWED_EMAILS)
     return {
         "configured": bool(OPENAI_API_KEY and OPENAI_MODEL),
         "model": OPENAI_MODEL or None,
-        "local_only": True,
+        "local_only": not auth_ready,
+        "daily_limit": AI_DAILY_LIMIT,
     }
 
 
 @app.post("/api/analysis", response_model=MarketAnalysisResponse)
 def analyze_market(
     payload: MarketAnalysisRequest,
-    request: Request,
-    _: None = Depends(require_read_access),
+    ai_user: dict[str, str] = Depends(require_ai_user),
 ):
-    if (
-        request.client is None
-        or request.client.host not in {"127.0.0.1", "::1", "testclient"}
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="AI analysis is restricted to local development until remote authentication and rate limits are configured.",
-        )
-    if not OPENAI_API_KEY or not OPENAI_MODEL:
-        raise HTTPException(
-            status_code=503,
-            detail="Configure OPENAI_API_KEY and OPENAI_MODEL in backend/.env, then restart the API.",
-        )
+    reserve_ai_usage(ai_user["id"])
 
     try:
         client = OpenAI(api_key=OPENAI_API_KEY, timeout=45.0, max_retries=1)
